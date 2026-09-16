@@ -3,40 +3,62 @@ name: Release
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Merged release PR number
+        required: true
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.pull_request.head.ref }}
+  group: release-${{ github.event.pull_request.number || inputs.pull_request }}
   cancel-in-progress: false
 
 jobs:
   publish:
     if: >-
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.base.ref == github.event.repository.default_branch &&
-      startsWith(github.event.pull_request.head.ref, 'releasing/v')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'releasing/v'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: read
     env:
-      RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
-      RELEASE_HEAD: ${{ github.event.pull_request.head.sha }}
+      RELEASE_PR: ${{ github.event.pull_request.number || inputs.pull_request }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - uses: ./.github/actions/setup-nix
-      - name: Download the PR's validated upload
+      - name: Resolve merged release PR
         env:
           GH_TOKEN: ${{ github.token }}
-        run: nix develop .#release --no-update-lock-file -c ./scripts/download-release.sh "${RELEASE_BRANCH#releasing/}" "$RELEASE_HEAD"
+        run: |
+          nix develop .#release --no-update-lock-file -c gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq '
+            if .merged and .head.repo.full_name == .base.repo.full_name and
+               .base.ref == .base.repo.default_branch and (.head.ref | startswith("releasing/v")) then
+              "RELEASE_BRANCH=\(.head.ref)\nRELEASE_HEAD=\(.head.sha)\nRELEASE_COMMIT=\(.merge_commit_sha)"
+            else error("Expected a merged release PR from this repository into its default branch") end
+          ' >> "$GITHUB_ENV"
+      # Keep the released source separate so retries can use fixed upload scripts.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+          path: release-source
+          persist-credentials: false
+      - name: Download the PR's validated upload
+        working-directory: release-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop ..#release --no-update-lock-file -c ../scripts/download-release.sh "${RELEASE_BRANCH#releasing/}" "$RELEASE_HEAD"
       - name: Upload crate and create GitHub release
+        working-directory: release-source
         env:
           GH_TOKEN: ${{ github.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: nix develop .#release --no-update-lock-file -c ./scripts/publish-release.sh "${RELEASE_BRANCH#releasing/}"
+        run: nix develop ..#release --no-update-lock-file -c ../scripts/publish-release.sh "${RELEASE_BRANCH#releasing/}"
