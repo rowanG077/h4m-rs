@@ -129,14 +129,22 @@ set -euo pipefail
 method=GET
 output=
 payload=
+user_agent=
 while (( $# )); do
     case "$1" in
         --request) method=$2; shift 2 ;;
         --output) output=$2; shift 2 ;;
         --data-binary) payload=${2#@}; shift 2 ;;
+        --user-agent) user_agent=$2; shift 2 ;;
         *) shift ;;
     esac
 done
+# crates.io rejects requests without an identifying user agent.
+if [[ $user_agent != "h4m-release ($GITHUB_REPOSITORY)" ]]; then
+    printf '{"errors":[{"detail":"API data access policy"}]}' > "$output"
+    printf '403'
+    exit
+fi
 if [[ $method == PUT ]]; then
     echo 'crate upload' >> "$MOCK_LOG"
     cp "$payload" "$MOCK_SENT"

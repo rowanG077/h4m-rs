@@ -45,5 +45,10 @@ To retry, rerun the failed jobs. Preparation preserves edits to an existing PR.
 Publishing skips an existing crate only if its checksum matches the saved
 package, then finishes the GitHub release. Published changes need a new version.
 
+If the upload scripts needed a fix, merge it first, then choose **Actions →
+Release → Run workflow** on the default branch and enter the original release
+PR number. This uses the latest upload scripts with that PR's original validated
+artifact and merge commit. No version bump or new tag is needed.
+
 Artifacts are retained for 90 days; refresh an old PR's checks before merging.
 Outages, expired credentials, or missing artifacts can still interrupt delivery.

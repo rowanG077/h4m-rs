@@ -12,6 +12,7 @@ output=target/release-upload
 
 # On retries, only skip crates.io if the uploaded archive is exactly this build.
 status=$(curl --silent --show-error --retry 3 --output "$temporary/registry" \
+    --user-agent "h4m-release ($GITHUB_REPOSITORY)" \
     --write-out '%{http_code}' "https://crates.io/api/v1/crates/h4m/$version")
 case "$status" in
     200)
