@@ -1,0 +1,38 @@
+[package]
+name = "h4m"
+version = "0.1.0"
+edition = "2021"
+description = "A dependency-free, pure Rust HVQM4 1.3/1.5 (H4M) video decoder"
+documentation = "https://docs.rs/h4m"
+repository = "https://github.com/rowanG077/h4m-rs"
+readme = "README.md"
+license = "LGPL-2.0-or-later"
+keywords = ["h4m", "hvqm4", "video", "decoder", "gamedev"]
+categories = ["multimedia::video", "multimedia::encoding"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/benches/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/RELEASING.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+]
+
+[[bin]]
+name = "h4m"
+path = "src/bin/h4m.rs"
+
+[[bench]]
+name = "decode"
+harness = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

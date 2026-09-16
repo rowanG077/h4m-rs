@@ -1,0 +1,41 @@
+name: Prepare release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: prepare-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event.deleted == false
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nix
+      - name: Prepare version and changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/release-metadata.sh notes "$RELEASE_TAG" > /dev/null
+          nix develop --no-update-lock-file -c gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f "tag_name=$RELEASE_TAG" --jq .body > "$RUNNER_TEMP/release-notes.md"
+          nix develop --no-update-lock-file -c ./scripts/release-metadata.sh \
+            prepare "$RELEASE_TAG" "$RUNNER_TEMP/release-notes.md"
+      - name: Open release PR and start CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop --no-update-lock-file -c ./scripts/release-pr.sh "$RELEASE_TAG"

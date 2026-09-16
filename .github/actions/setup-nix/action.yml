@@ -1,0 +1,17 @@
+name: Set up Nix
+description: Install Nix and cache the store using GitHub Actions.
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          keep-env-derivations = true
+          keep-outputs = true
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', '**/*.nix') }}-${{ github.sha }}
+        restore-prefixes-first-match: |
+          nix-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', '**/*.nix') }}-
+          nix-v1-${{ runner.os }}-${{ runner.arch }}-
+        gc-max-store-size: 3G

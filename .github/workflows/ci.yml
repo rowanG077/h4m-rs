@@ -1,0 +1,76 @@
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  nix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      IS_RELEASE: >-
+        ${{ matrix.os == 'ubuntu-24.04' && startsWith(github.head_ref || github.ref_name, 'releasing/v') &&
+            (github.event_name != 'pull_request' ||
+              (github.event.pull_request.head.repo.full_name == github.repository &&
+               github.base_ref == github.event.repository.default_branch)) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nix
+      - name: Build, test, and compare with the reference (debug and release)
+        run: nix flake check --no-update-lock-file --print-build-logs
+      - run: nix develop --no-update-lock-file -c cargo test --locked
+      - run: nix develop --no-update-lock-file -c cargo fmt --all -- --check
+      - run: nix develop --no-update-lock-file -c cargo clippy --locked --all-targets -- -D warnings
+      - run: nix develop --no-update-lock-file -c cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Check release automation
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          nix develop --no-update-lock-file -c actionlint
+          nix develop --no-update-lock-file -c shellcheck scripts/*.sh
+          nix develop --no-update-lock-file -c ./scripts/test-release.sh
+          nix develop .#release --no-update-lock-file -c true
+      - name: Verify package and prepare release upload
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$IS_RELEASE" == true ]]; then
+            nix develop --no-update-lock-file -c ./scripts/package-release.sh "${SOURCE_BRANCH#releasing/}"
+          else
+            nix develop --no-update-lock-file -c cargo package --locked
+          fi
+      - name: Save validated release
+        if: env.IS_RELEASE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.SOURCE_SHA }}
+          path: target/release-upload/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  ready:
+    name: Release readiness
+    needs: nix
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every platform and release check to pass
+        env:
+          RESULT: ${{ needs.nix.result }}
+        run: test "$RESULT" = success

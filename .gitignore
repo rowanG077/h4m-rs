@@ -1,0 +1,7 @@
+/target/
+/reference/
+/result
+/result-*
+*.h4m
+*.ppm
+*.yuv
