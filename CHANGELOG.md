@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.4.0
+
+
 ### Added
 
 - Stereo HVQM4 IMA-ADPCM audio decoding with explicit one-based track selection:
@@ -50,6 +53,7 @@
   Previously a container could reject a packet accepted with the same raw limit.
 - Return buffer errors instead of panicking when custom video storage exposes
   undersized views after construction.
+
 
 ## 0.3.0
 
