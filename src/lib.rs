@@ -1,28 +1,4 @@
-//! Dependency-free HVQM4 1.3/1.5 decoding with no unsafe code.
-//!
-//! [`VideoDecoder`] decodes demuxed packets and [`SliceDecoder`] reads an H4M
-//! byte slice. Both accept caller-provided buffers and work without `std` or
-//! `alloc`. The default `std` feature adds the allocating, streaming `Decoder`
-//! and file-output helpers. The independent `alloc` feature adds owned video
-//! buffers and a reusable RGB vector helper.
-//!
-//! Frames borrow decoder storage and arrive in **decoding order**; use
-//! [`Frame::display_index`] to reorder them for presentation. Audio is skipped.
-//!
-//! ```
-//! use h4m::{BlockState, ChromaSampling, DecoderBuffers, Limits, Version,
-//!           VideoDecoder, VideoInfo};
-//! let info = VideoInfo::new(Version::V15, 16, 16, ChromaSampling::Yuv420)?;
-//! let mut frames = [[0u8; 384]; 3];
-//! let mut blocks = [BlockState::EMPTY; 68];
-//! let [current, past, future] = &mut frames;
-//! let mut decoder = VideoDecoder::with_buffers(info, DecoderBuffers {
-//!     frames: [current.as_mut_slice(), past.as_mut_slice(), future.as_mut_slice()],
-//!     blocks: blocks.as_mut_slice(),
-//! }, Limits::default())?;
-//! // decoder.decode(kind, display_index, packet)?;
-//! # Ok::<(), h4m::Error>(())
-//! ```
+#![doc = include_str!("../README.md")]
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -31,25 +7,34 @@ extern crate alloc;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
+mod audio;
+#[cfg(feature = "std")]
+pub use audio::AudioDecoder;
+pub use audio::{
+    AudioBufferRequirements, AudioInfo, AudioLimits, AudioPacketDecoder, AudioPacketMode,
+    SliceAudioDecoder,
+};
 mod container;
 mod entropy;
 mod error;
+mod storage;
 mod syntax;
 mod video;
 
 #[cfg(feature = "std")]
-pub use container::Decoder;
-pub use container::{Header, SliceDecoder};
+pub use container::VideoDecoder;
+pub use container::{Header, SliceVideoDecoder};
 pub use error::{BufferKind, Error};
 pub use syntax::BlockState;
-pub use video::{DecoderBuffers, VideoDecoder};
+pub use video::{VideoBuffers, VideoPacketDecoder};
 
 /// Video decoder backed by caller-owned mutable slices.
-pub type BorrowedVideoDecoder<'a> = VideoDecoder<&'a mut [u8], &'a mut [BlockState]>;
+pub type BorrowedVideoPacketDecoder<'a> = VideoPacketDecoder<&'a mut [u8], &'a mut [BlockState]>;
 
 /// Video decoder backed by vectors allocated once at construction.
 #[cfg(feature = "alloc")]
-pub type OwnedVideoDecoder = VideoDecoder<alloc::vec::Vec<u8>, alloc::vec::Vec<BlockState>>;
+pub type OwnedVideoPacketDecoder =
+    VideoPacketDecoder<alloc::vec::Vec<u8>, alloc::vec::Vec<BlockState>>;
 
 /// HVQM4 bitstream version (affects chroma motion interpolation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +59,7 @@ pub enum FrameType {
 
 impl TryFrom<u16> for FrameType {
     type Error = Error;
+
     fn try_from(value: u16) -> Result<Self, Error> {
         match value {
             0x10 => Ok(Self::I),
@@ -86,14 +72,16 @@ impl TryFrom<u16> for FrameType {
 
 /// Allocation limits applied before allocating pixel or packet buffers.
 #[derive(Debug, Clone, Copy)]
-pub struct Limits {
+pub struct VideoLimits {
     /// Maximum luma pixels per frame. Default: 4096 × 4096.
     pub max_pixels: usize,
-    /// Maximum compressed video packet size. Default: 64 MiB.
+    /// Maximum compressed picture payload bytes, excluding the four-byte display
+    /// index and eight-byte container packet header. Default: 64 MiB.
+    /// Uses the same units for raw-packet and container decoders.
     pub max_frame_bytes: usize,
 }
 
-impl Default for Limits {
+impl Default for VideoLimits {
     fn default() -> Self {
         Self {
             max_pixels: 4096 * 4096,
@@ -112,6 +100,7 @@ pub enum ChromaSampling {
     /// Half-resolution chroma in both dimensions.
     Yuv420,
 }
+
 impl ChromaSampling {
     /// Number of luma samples per chroma sample horizontally.
     pub const fn horizontal_factor(self) -> u8 {
@@ -120,6 +109,7 @@ impl ChromaSampling {
             Self::Yuv422 | Self::Yuv420 => 2,
         }
     }
+
     /// Number of luma samples per chroma sample vertically.
     pub const fn vertical_factor(self) -> u8 {
         match self {
@@ -128,8 +118,10 @@ impl ChromaSampling {
         }
     }
 }
+
 impl TryFrom<(u8, u8)> for ChromaSampling {
     type Error = Error;
+
     fn try_from(factors: (u8, u8)) -> Result<Self, Error> {
         match factors {
             (1, 1) => Ok(Self::Yuv444),
@@ -144,7 +136,7 @@ impl TryFrom<(u8, u8)> for ChromaSampling {
 
 /// Required reusable storage for one video decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BufferRequirements {
+pub struct VideoBufferRequirements {
     /// Bytes in **each** of the three frame buffers, including all Y/U/V planes.
     pub frame_bytes: usize,
     /// Elements in the block-descriptor buffer (not bytes).
@@ -159,6 +151,7 @@ pub struct VideoInfo {
     height: u16,
     sampling: ChromaSampling,
 }
+
 impl VideoInfo {
     /// Validate dimensions and construct a video format without allocating.
     /// Width and height must be nonzero multiples of eight.
@@ -186,35 +179,48 @@ impl VideoInfo {
             sampling,
         })
     }
+
     /// Codec version.
     pub const fn version(self) -> Version {
         self.version
     }
+
     /// Width in luma samples.
     pub const fn width(self) -> u16 {
         self.width
     }
+
     /// Height in luma samples.
     pub const fn height(self) -> u16 {
         self.height
     }
+
     /// Chroma subsampling layout.
     pub const fn sampling(self) -> ChromaSampling {
         self.sampling
     }
+
     /// Storage sizes for caller-owned buffers. This does not allocate.
-    pub fn buffer_requirements(self) -> BufferRequirements {
+    pub fn buffer_requirements(self) -> VideoBufferRequirements {
         let width = usize::from(self.width);
         let height = usize::from(self.height);
         let chroma_width = width / usize::from(self.sampling.horizontal_factor());
         let chroma_height = height / usize::from(self.sampling.vertical_factor());
-        BufferRequirements {
+        VideoBufferRequirements {
             frame_bytes: width * height + 2 * chroma_width * chroma_height,
             block_states: (width / 4 + 2) * (height / 4 + 2)
                 + 2 * (chroma_width / 4 + 2) * (chroma_height / 4 + 2),
         }
     }
-    pub(crate) fn validate_limits(self, limits: Limits) -> Result<(), Error> {
+
+    /// Bytes required for packed RGB24 output. Independent of resource limits.
+    pub fn rgb_buffer_size(self) -> usize {
+        usize::from(self.width) * usize::from(self.height) * 3
+    }
+
+    /// Check the pixel requirement against a resource policy before allocating.
+    /// Packet byte limits are checked by the decoder when packets are supplied.
+    pub fn validate_limits(self, limits: VideoLimits) -> Result<(), Error> {
         if usize::from(self.width) * usize::from(self.height) > limits.max_pixels {
             return Err(Error::Limit("pixel count"));
         }
@@ -222,76 +228,149 @@ impl VideoInfo {
     }
 }
 
-/// A tightly packed, borrowed, eight-bit image plane.
+/// A validated, tightly packed, borrowed eight-bit image plane.
+/// Obtain planes from [`Frame::y`], [`Frame::u`] and [`Frame::v`].
 #[derive(Debug, Clone, Copy)]
 pub struct Plane<'a> {
-    /// Samples in row-major order.
-    pub data: &'a [u8],
-    /// Samples per row (also the stride).
-    pub width: usize,
-    /// Number of rows.
-    pub height: usize,
+    data: &'a [u8],
+    width: usize,
+    height: usize,
 }
 
-/// A decoded frame, borrowing reusable decoder storage.
+impl<'a> Plane<'a> {
+    /// Samples in row-major order; length is exactly width times height.
+    pub const fn data(self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Samples per row (also the stride in bytes).
+    pub const fn width(self) -> usize {
+        self.width
+    }
+
+    /// Number of rows.
+    pub const fn height(self) -> usize {
+        self.height
+    }
+}
+
+/// A validated, immutable decoded frame, borrowing reusable storage.
+///
+/// Decoders produce frames automatically. Use [`Self::from_planes`] to wrap
+/// external tightly packed planes; sizes are checked before a frame is created.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame<'a> {
-    /// Zero-based presentation index, including the container's GOP offset.
-    pub display_index: u32,
-    /// Picture coding type.
-    pub kind: FrameType,
-    /// Video layout.
-    pub info: VideoInfo,
-    /// Luma plane.
-    pub y: Plane<'a>,
-    /// Blue-difference chroma plane.
-    pub u: Plane<'a>,
-    /// Red-difference chroma plane.
-    pub v: Plane<'a>,
+    display_index: u32,
+    kind: FrameType,
+    info: VideoInfo,
+    y: Plane<'a>,
+    u: Plane<'a>,
+    v: Plane<'a>,
 }
 
 impl<'a> Frame<'a> {
+    /// Validate three tightly packed Y/U/V planes against a video layout.
+    /// Plane lengths must exactly match the layout; padded strides are unsupported.
+    pub fn from_planes(
+        info: VideoInfo,
+        kind: FrameType,
+        display_index: u32,
+        planes: [&'a [u8]; 3],
+    ) -> Result<Self, Error> {
+        let width = usize::from(info.width);
+        let height = usize::from(info.height);
+        let cw = width / usize::from(info.sampling.horizontal_factor());
+        let ch = height / usize::from(info.sampling.vertical_factor());
+        if planes[0].len() != width * height
+            || planes[1].len() != cw * ch
+            || planes[2].len() != cw * ch
+        {
+            return Err(Error::Invalid("plane lengths disagree with video layout"));
+        }
+        Ok(Self {
+            info,
+            kind,
+            display_index,
+            y: Plane {
+                data: planes[0],
+                width,
+                height,
+            },
+            u: Plane {
+                data: planes[1],
+                width: cw,
+                height: ch,
+            },
+            v: Plane {
+                data: planes[2],
+                width: cw,
+                height: ch,
+            },
+        })
+    }
+
     pub(crate) fn new(
         info: VideoInfo,
         kind: FrameType,
         display_index: u32,
         data: &'a [u8],
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let width = usize::from(info.width);
         let height = usize::from(info.height);
         let cw = width / usize::from(info.sampling.horizontal_factor());
         let ch = height / usize::from(info.sampling.vertical_factor());
-        let (y, rest) = data.split_at(width * height);
-        let (u, v) = rest.split_at(cw * ch);
-        Self {
-            info,
-            kind,
-            display_index,
-            y: Plane {
-                data: y,
-                width,
-                height,
-            },
-            u: Plane {
-                data: u,
-                width: cw,
-                height: ch,
-            },
-            v: Plane {
-                data: v,
-                width: cw,
-                height: ch,
-            },
-        }
+        let (y, rest) = data
+            .split_at_checked(width * height)
+            .ok_or(Error::Truncated)?;
+        let (u, v) = rest.split_at_checked(cw * ch).ok_or(Error::Truncated)?;
+        Self::from_planes(info, kind, display_index, [y, u, v])
+    }
+
+    /// Zero-based presentation index, including the container's GOP offset.
+    pub const fn display_index(self) -> u32 {
+        self.display_index
+    }
+
+    /// Picture coding type.
+    pub const fn kind(self) -> FrameType {
+        self.kind
+    }
+
+    /// Validated video layout.
+    pub const fn info(self) -> VideoInfo {
+        self.info
+    }
+
+    /// Luma plane.
+    pub const fn y(self) -> Plane<'a> {
+        self.y
+    }
+
+    /// Blue-difference chroma plane.
+    pub const fn u(self) -> Plane<'a> {
+        self.u
+    }
+
+    /// Red-difference chroma plane.
+    pub const fn v(self) -> Plane<'a> {
+        self.v
+    }
+
+    /// Y, U, V planes in order.
+    pub const fn planes(self) -> [Plane<'a>; 3] {
+        [self.y, self.u, self.v]
+    }
+
+    /// Bytes needed for packed RGB24 output.
+    pub fn rgb_buffer_size(self) -> usize {
+        self.info.rgb_buffer_size()
     }
 
     /// Convert to packed RGB24 in caller-provided storage without allocating.
-    /// Extra bytes in `output` are left unchanged.
-    ///
-    /// Uses the reference decoder's full-range YUV conversion, nearest-neighbor
-    /// chroma sampling, and truncation. No fused multiply-add is used.
+    /// Extra output bytes are unchanged. Insufficient storage leaves output untouched.
+    /// Uses full-range YUV, nearest-neighbor chroma sampling, and truncation.
     pub fn to_rgb_into(&self, output: &mut [u8]) -> Result<(), Error> {
-        let required = self.y.data.len() * 3;
+        let required = self.rgb_buffer_size();
         if output.len() < required {
             return Err(Error::BufferTooSmall {
                 buffer: BufferKind::Rgb,
@@ -317,22 +396,23 @@ impl<'a> Frame<'a> {
         Ok(())
     }
 
-    /// Convert to packed RGB24, growing and reusing `output` as needed.
+    /// Convert to RGB24, growing/reusing a vector. Allocation failures return an error.
     #[cfg(feature = "alloc")]
-    pub fn to_rgb(&self, output: &mut alloc::vec::Vec<u8>) {
-        output.resize(self.y.data.len() * 3, 0);
+    pub fn to_rgb(&self, output: &mut alloc::vec::Vec<u8>) -> Result<(), Error> {
+        let required = self.rgb_buffer_size();
+        output.try_reserve(required.saturating_sub(output.len()))?;
+        output.resize(required, 0);
         self.to_rgb_into(output)
-            .expect("RGB buffer has the required length");
     }
 
-    /// Write one binary PPM image, reusing `scratch` for RGB conversion.
+    /// Write a binary PPM image, reusing `scratch` for RGB conversion.
     #[cfg(feature = "std")]
     pub fn write_ppm<W: std::io::Write>(
         &self,
         mut writer: W,
         scratch: &mut alloc::vec::Vec<u8>,
     ) -> Result<(), Error> {
-        self.to_rgb(scratch);
+        self.to_rgb(scratch)?;
         write!(writer, "P6\n{} {}\n255\n", self.y.width, self.y.height)?;
         writer.write_all(scratch)?;
         Ok(())

@@ -15,19 +15,19 @@ in decoding order; the test compares bytes directly rather than hashes of output
 The source hashes below identify the locally supplied inputs. No movie assets
 are distributed with this test.
 
-| Original movie | Dimensions | Frames | Input SHA-256 |
-|---|---|---:|---|
-| `disc1/files/MOV/as1.h4m` | 640×336 | 3,111 | `d136b19b00d3f9c9102ba8c85ad0bc0bf278d970f3eec342dfac797dfd972de5` |
-| `disc1/files/MOV/op.h4m` | 640×336 | 3,630 | `ae54c9c117bf126d03166a677b830464e7520c6a5181667970559ae43cb8e036` |
-| `disc1/files/MOV/s01.h4m` | 640×480 | 1,918 | `8bf5e7227e634a61c76abb24bb5053e329508149ccf78fcff05681d45d49fd40` |
-| `disc1/files/MOV/s03.h4m` | 640×480 | 689 | `c3c4c462d8ab7efd7ddaec7cbfd28a480bbbb3127079e90e792183a9a565742f` |
-| `disc1/files/MOV/s07.h4m` | 640×480 | 629 | `1a58d2c55bc052ce91a0074e76bfced9ca515e8159729341396624a9ddac6319` |
-| `disc1/files/MOV/s08.h4m` | 640×480 | 1,169 | `1a51353a2923acfe5078535878fbf9d86082be82d0549afa974df1e503ac47ac` |
-| `disc2/files/MOV/as2.h4m` | 640×336 | 1,688 | `1cd7ecdde350503fdcff11a4114ca494369444190722cf3697d706c1ade6ff4e` |
-| `disc2/files/MOV/as3.h4m` | 640×336 | 8,101 | `9319782aa91688980a4ad36efaa41a8a5bb94792989c3d730fd8a2835dbae8a1` |
-| `disc2/files/MOV/op.h4m` | 640×336 | 3,627 | `53e52bc09a25e767b67ca301a43b0b29c829a1e120a02036d22619ddc33c372c` |
-| `disc2/files/MOV/s09.h4m` | 640×480 | 1,379 | `cbd8ed83a65a840f9a9d2477a105c6ffdfcf5f3e85750b2c8b515b14adfd3ee3` |
-| `disc2/files/MOV/s10.h4m` | 640×480 | 989 | `d9409a0d30143da2d87615b9e995f38141e5ef88b2f6ce56b46510e5cc87e97f` |
+| Original movie            | Dimensions | Frames | Input SHA-256                                                      |
+| ------------------------- | ---------- | -----: | ------------------------------------------------------------------ |
+| `disc1/files/MOV/as1.h4m` | 640×336    | 3,111  | `d136b19b00d3f9c9102ba8c85ad0bc0bf278d970f3eec342dfac797dfd972de5` |
+| `disc1/files/MOV/op.h4m`  | 640×336    | 3,630  | `ae54c9c117bf126d03166a677b830464e7520c6a5181667970559ae43cb8e036` |
+| `disc1/files/MOV/s01.h4m` | 640×480    | 1,918  | `8bf5e7227e634a61c76abb24bb5053e329508149ccf78fcff05681d45d49fd40` |
+| `disc1/files/MOV/s03.h4m` | 640×480    | 689    | `c3c4c462d8ab7efd7ddaec7cbfd28a480bbbb3127079e90e792183a9a565742f` |
+| `disc1/files/MOV/s07.h4m` | 640×480    | 629    | `1a58d2c55bc052ce91a0074e76bfced9ca515e8159729341396624a9ddac6319` |
+| `disc1/files/MOV/s08.h4m` | 640×480    | 1,169  | `1a51353a2923acfe5078535878fbf9d86082be82d0549afa974df1e503ac47ac` |
+| `disc2/files/MOV/as2.h4m` | 640×336    | 1,688  | `1cd7ecdde350503fdcff11a4114ca494369444190722cf3697d706c1ade6ff4e` |
+| `disc2/files/MOV/as3.h4m` | 640×336    | 8,101  | `9319782aa91688980a4ad36efaa41a8a5bb94792989c3d730fd8a2835dbae8a1` |
+| `disc2/files/MOV/op.h4m`  | 640×336    | 3,627  | `53e52bc09a25e767b67ca301a43b0b29c829a1e120a02036d22619ddc33c372c` |
+| `disc2/files/MOV/s09.h4m` | 640×480    | 1,379  | `cbd8ed83a65a840f9a9d2477a105c6ffdfcf5f3e85750b2c8b515b14adfd3ee3` |
+| `disc2/files/MOV/s10.h4m` | 640×480    | 989    | `d9409a0d30143da2d87615b9e995f38141e5ef88b2f6ce56b46510e5cc87e97f` |
 
 Reproduce with the complete extraction root, not an individual movie directory:
 

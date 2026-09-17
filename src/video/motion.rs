@@ -1,4 +1,5 @@
 //! Checked motion sampling, including sequential copies within a P picture.
+
 use super::plane::Layout;
 use crate::{
     error::{Error, Result},
@@ -13,6 +14,7 @@ enum Interpolation {
     Vertical,
     Bilinear,
 }
+
 impl Interpolation {
     fn from_parity(x: i32, y: i32) -> Self {
         match (x & 1 != 0, y & 1 != 0) {
@@ -22,6 +24,7 @@ impl Interpolation {
             (true, true) => Self::Bilinear,
         }
     }
+
     fn offsets(self) -> (usize, usize) {
         match self {
             Self::Integer => (0, 0),
@@ -38,6 +41,7 @@ pub(super) struct MotionSample {
     stride: usize,
     interpolation: Interpolation,
 }
+
 impl MotionSample {
     pub fn new(
         layout: Layout,
@@ -68,6 +72,7 @@ impl MotionSample {
             interpolation,
         })
     }
+
     fn pixel(&self, source: &[u8], offset: usize) -> u8 {
         let (horizontal, vertical) = self.interpolation.offsets();
         let sum = u16::from(source[offset])
@@ -76,6 +81,7 @@ impl MotionSample {
             + u16::from(source[offset + vertical * self.stride + horizontal]);
         ((sum + 2) >> 2) as u8
     }
+
     pub fn read(&self, source: &[u8]) -> [u8; 16] {
         let mut result = [0; 16];
         for (row, pixels) in result.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -90,6 +96,7 @@ impl MotionSample {
         }
         result
     }
+
     pub fn copy_within(&self, destination: &mut [u8], target: usize) {
         // The C reference writes each pixel immediately. Snapshotting the block
         // would change overlapping current-picture references, even within a row.

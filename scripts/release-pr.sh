@@ -43,7 +43,7 @@ fi
 
 if [[ -z $existing ]]; then
     body="$temporary/body"
-    cat > "$body" <<EOF
+    cat > "$body" << EOF
 Prepare $tag: update the Cargo version and lockfile, and finalize the changelog.
 
 Review the release notes in CHANGELOG.md and wait for Release readiness to pass.

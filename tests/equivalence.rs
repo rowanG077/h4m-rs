@@ -44,14 +44,14 @@ fn original_decoder_equivalence() {
             fixture.name,
             String::from_utf8_lossy(&output.stderr)
         );
-        let mut decoder = h4m::Decoder::new(&input[..]).unwrap();
+        let mut decoder = h4m::VideoDecoder::new(&input[..]).unwrap();
         let mut rgb = Vec::new();
         while let Some(frame) = decoder
             .next_frame()
             .unwrap_or_else(|e| panic!("{}: {e}", fixture.name))
         {
             let expected =
-                fs::read(dir.join(format!("output/video_rgb_{:04}.ppm", frame.display_index)))
+                fs::read(dir.join(format!("output/video_rgb_{:04}.ppm", frame.display_index())))
                     .unwrap();
             let mut actual = Vec::new();
             frame.write_ppm(&mut actual, &mut rgb).unwrap();
@@ -63,14 +63,14 @@ fn original_decoder_equivalence() {
                 panic!(
                     "{} frame {} {:?}: mismatch at byte {first:?}, Rust {:?}, C {:?}",
                     fixture.name,
-                    frame.display_index,
-                    frame.kind,
+                    frame.display_index(),
+                    frame.kind(),
                     first.map(|n| actual[n]),
                     first.map(|n| expected[n])
                 );
             }
             let expected_yuv =
-                fs::read(dir.join(format!("output/video_yuv_{:04}.yuv", frame.display_index)))
+                fs::read(dir.join(format!("output/video_yuv_{:04}.yuv", frame.display_index())))
                     .unwrap();
             let mut actual_yuv = Vec::new();
             frame.write_yuv(&mut actual_yuv).unwrap();
@@ -83,8 +83,8 @@ fn original_decoder_equivalence() {
                 panic!(
                     "{} frame {} {:?}: YUV byte {first}, Rust {}, C {}",
                     fixture.name,
-                    frame.display_index,
-                    frame.kind,
+                    frame.display_index(),
+                    frame.kind(),
                     actual_yuv[first],
                     expected_yuv[first]
                 );

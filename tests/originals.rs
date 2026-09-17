@@ -50,8 +50,9 @@ fn every_original_movie_matches_reference() {
     for movie in &movies {
         let name = movie.strip_prefix(&root).unwrap().display().to_string();
         eprintln!("Comparing {name}");
-        let mut decoder = h4m::Decoder::new(BufReader::new(File::open(movie).unwrap())).unwrap();
-        let declared = decoder.header().video_frames;
+        let mut decoder =
+            h4m::VideoDecoder::new(BufReader::new(File::open(movie).unwrap())).unwrap();
+        let declared = decoder.header().video_frames();
         let mut reference = Reference(
             Command::new(&binary)
                 .arg(movie)
@@ -75,13 +76,14 @@ fn every_original_movie_matches_reference() {
             expected.read_exact(&mut metadata).unwrap_or_else(|error| {
                 panic!(
                     "{name} frame {}: reference header: {error}",
-                    frame.display_index
+                    frame.display_index()
                 )
             });
             let index = u32::from_be_bytes(metadata[..4].try_into().unwrap());
             let length = u32::from_be_bytes(metadata[4..].try_into().unwrap()) as usize;
-            assert_eq!(index, frame.display_index, "{name}: presentation index");
-            let actual_length = frame.y.data.len() + frame.u.data.len() + frame.v.data.len();
+            assert_eq!(index, frame.display_index(), "{name}: presentation index");
+            let actual_length =
+                frame.y().data().len() + frame.u().data().len() + frame.v().data().len();
             assert_eq!(length, actual_length, "{name} frame {index}: plane length");
             assert!(index < declared, "{name}: out-of-range frame {index}");
             assert!(!seen[index as usize], "{name}: duplicate frame {index}");
@@ -92,15 +94,17 @@ fn every_original_movie_matches_reference() {
                 .unwrap_or_else(|error| panic!("{name} frame {index}: reference planes: {error}"));
             let mut offset = 0;
             for (plane, actual) in [
-                ('Y', frame.y.data),
-                ('U', frame.u.data),
-                ('V', frame.v.data),
+                ('Y', frame.y().data()),
+                ('U', frame.u().data()),
+                ('V', frame.v().data()),
             ] {
                 let expected = &pixels[offset..offset + actual.len()];
                 if let Some(first) = actual.iter().zip(expected).position(|(a, b)| a != b) {
                     panic!(
                         "{name} frame {index} {:?}: {plane} byte {first}, Rust {}, C {}",
-                        frame.kind, actual[first], expected[first]
+                        frame.kind(),
+                        actual[first],
+                        expected[first]
                     );
                 }
                 offset += actual.len();

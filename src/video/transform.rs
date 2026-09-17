@@ -1,4 +1,5 @@
 //! Adaptive orthogonal transforms and intra/predicted 4×4 reconstruction.
+
 use crate::{
     entropy::Streams,
     error::{Error, Result},
@@ -50,6 +51,7 @@ impl<'a> Nest<'a> {
             source: NestSource::Dc,
         }
     }
+
     pub fn reference(
         data: &'a [u8],
         stride: usize,
@@ -81,6 +83,7 @@ struct BasisDescriptor {
     coefficient_low: u8,
     negative: bool,
 }
+
 impl BasisDescriptor {
     fn parse(code: u16, orientation: Orientation) -> Self {
         let long_position = usize::from(code & 0x3f);

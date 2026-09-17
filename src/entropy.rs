@@ -1,4 +1,5 @@
 //! Bounded bit readers, Huffman codebooks, and named picture entropy streams.
+
 use crate::{
     error::{be16, be32, Error, Result},
     syntax::{
@@ -13,10 +14,12 @@ struct Bits<'a> {
     data: &'a [u8],
     position: usize,
 }
+
 impl<'a> Bits<'a> {
     fn new(data: &'a [u8]) -> Self {
         Self { data, position: 0 }
     }
+
     #[inline]
     fn bit(&mut self) -> Result<bool> {
         let byte = *self.data.get(self.position / 8).ok_or(Error::Truncated)?;
@@ -24,6 +27,7 @@ impl<'a> Bits<'a> {
         self.position += 1;
         Ok(value)
     }
+
     fn bits(&mut self, count: u8) -> Result<u32> {
         let mut value = 0;
         for _ in 0..count {
@@ -31,6 +35,7 @@ impl<'a> Bits<'a> {
         }
         Ok(value)
     }
+
     fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
         let start = self.position / 8;
         let end = start.checked_add(N).ok_or(Error::Truncated)?;
@@ -40,6 +45,7 @@ impl<'a> Bits<'a> {
         self.position += N * 8;
         Ok(result)
     }
+
     #[inline]
     fn peek_byte(&self) -> Option<usize> {
         if self.data.len() * 8 - self.position < 8 {
@@ -58,11 +64,13 @@ enum Node {
     Leaf(u8),
     Branch(u8),
 }
+
 #[derive(Clone, Copy)]
 struct Lookup {
     node: Node,
     consumed: u8,
 }
+
 #[derive(Clone, Copy)]
 enum SymbolKind {
     Unsigned,
@@ -75,6 +83,7 @@ struct Tree {
     root: Node,
     lookup: [Lookup; 256],
 }
+
 impl Tree {
     fn new() -> Self {
         Self {
@@ -87,6 +96,7 @@ impl Tree {
             }; 256],
         }
     }
+
     fn read(&mut self, bits: &mut Bits<'_>, kind: SymbolKind, shift: u8) -> Result<()> {
         if !bits.data.is_empty() {
             self.root = self.read_node(bits, kind, shift, &mut 0)?;
@@ -105,6 +115,7 @@ impl Tree {
         }
         Ok(())
     }
+
     fn read_node(
         &mut self,
         bits: &mut Bits<'_>,
@@ -131,6 +142,7 @@ impl Tree {
             Ok(Node::Branch(index as u8))
         }
     }
+
     #[inline]
     fn symbol(&self, bits: &mut Bits<'_>) -> Result<i32> {
         let mut node = self.root;
@@ -150,6 +162,7 @@ impl Tree {
             }
         }
     }
+
     fn escaped(&self, bits: &mut Bits<'_>, min: i32, max: i32) -> Result<i32> {
         let mut sum = 0i32;
         loop {
@@ -176,6 +189,7 @@ struct Codebooks {
     motion: Tree,
     macroblock_run: Tree,
 }
+
 impl Codebooks {
     fn new() -> Self {
         Self {
@@ -188,19 +202,23 @@ impl Codebooks {
         }
     }
 }
+
 struct BlockStreams<'a> {
     kinds: Bits<'a>,
     zero_runs: Bits<'a>,
 }
+
 struct PlaneStreams<'a> {
     dc: Bits<'a>,
     coefficients: Bits<'a>,
     details: Bits<'a>,
 }
+
 struct MotionWidths {
     horizontal: u8,
     vertical: u8,
 }
+
 struct InterStreams<'a> {
     horizontal: Bits<'a>,
     vertical: Bits<'a>,
@@ -209,6 +227,7 @@ struct InterStreams<'a> {
     targets: RunStream<'a, PredictionTarget>,
     modes: RunStream<'a, MotionMode>,
 }
+
 enum PictureStreams<'a> {
     Intra {
         zero_runs: Planes<Bits<'a>>,
@@ -227,6 +246,7 @@ pub(crate) struct Streams<'a> {
     pub dc_shift: u8,
     pub transform_shift: u8,
 }
+
 impl<'a> Streams<'a> {
     pub fn new(packet: &'a [u8], kind: FrameType) -> Result<Self> {
         let count = if kind == FrameType::I { 16 } else { 17 };
@@ -330,12 +350,14 @@ impl<'a> Streams<'a> {
             transform_shift: packet[1],
         })
     }
+
     pub fn nest_origin(&self) -> Result<(usize, usize)> {
         match self.picture {
             PictureStreams::Intra { nest_x, nest_y, .. } => Ok((nest_x, nest_y)),
             _ => Err(Error::Invalid("DC nest in an inter picture")),
         }
     }
+
     pub fn dc(&mut self, plane: PlaneId) -> Result<i32> {
         self.codebooks.dc.escaped(
             &mut self.planes[plane].dc,
@@ -343,6 +365,7 @@ impl<'a> Streams<'a> {
             127 << self.dc_shift,
         )
     }
+
     pub fn delta(&mut self, plane: PlaneId, remaining: &mut u32) -> Result<i32> {
         if *remaining > 0 {
             *remaining -= 1;
@@ -357,6 +380,7 @@ impl<'a> Streams<'a> {
         }
         Ok(delta)
     }
+
     pub fn block_types(&mut self, group: PlaneGroup, remaining: &mut u32) -> Result<u8> {
         if *remaining > 0 {
             *remaining -= 1;
@@ -372,17 +396,21 @@ impl<'a> Streams<'a> {
         }
         Ok(value)
     }
+
     pub fn literal(&mut self, plane: PlaneId) -> Result<[u8; 16]> {
         self.planes[plane].details.bytes()
     }
+
     pub fn basis_descriptor(&mut self, plane: PlaneId) -> Result<u16> {
         Ok(u16::from_be_bytes(self.planes[plane].details.bytes()?))
     }
+
     pub fn coefficient(&mut self, plane: PlaneId) -> Result<i32> {
         self.codebooks
             .coefficient
             .symbol(&mut self.planes[plane].coefficients)
     }
+
     pub fn macroblock_mode(&mut self) -> Result<MacroblockMode> {
         let PictureStreams::Inter(streams) = &mut self.picture else {
             return Err(Error::Invalid("macroblock run in an intra picture"));
@@ -401,6 +429,7 @@ impl<'a> Streams<'a> {
             },
         )
     }
+
     pub fn motion(&mut self, reference: Reference, vector: &mut MotionVector) -> Result<()> {
         let PictureStreams::Inter(streams) = &mut self.picture else {
             return Err(Error::Invalid("motion in an intra picture"));
@@ -441,18 +470,22 @@ struct RunStream<'a, T> {
     value: Option<T>,
     remaining: u32,
 }
+
 trait RunSymbol: Copy {
     fn initial(input: &mut Bits<'_>) -> Result<Self>;
     fn next(self, input: &mut Bits<'_>) -> Result<Self>;
 }
+
 impl RunSymbol for PredictionTarget {
     fn initial(input: &mut Bits<'_>) -> Result<Self> {
         (input.bits(2)? as u8).try_into()
     }
+
     fn next(self, input: &mut Bits<'_>) -> Result<Self> {
         Ok(self.transition(input.bit()?))
     }
 }
+
 impl RunSymbol for MotionMode {
     fn initial(input: &mut Bits<'_>) -> Result<Self> {
         Ok(if input.bit()? {
@@ -461,10 +494,12 @@ impl RunSymbol for MotionMode {
             Self::Residual
         })
     }
+
     fn next(self, _: &mut Bits<'_>) -> Result<Self> {
         Ok(self.toggle())
     }
 }
+
 impl<'a, T: RunSymbol> RunStream<'a, T> {
     fn new(mut input: Bits<'a>, tree: &Tree) -> Result<Self> {
         let (value, remaining) = if input.data.is_empty() {
@@ -481,6 +516,7 @@ impl<'a, T: RunSymbol> RunStream<'a, T> {
             remaining,
         })
     }
+
     fn next(&mut self, tree: &Tree) -> Result<T> {
         let mut value = self.value.ok_or(Error::Truncated)?;
         if self.remaining == 0 {
@@ -573,6 +609,7 @@ mod tests {
             Err(Error::Invalid("nonterminating Huffman escape"))
         ));
     }
+
     #[test]
     fn motion_vectors_stay_within_the_coded_range() {
         let mut tree = Tree::new();

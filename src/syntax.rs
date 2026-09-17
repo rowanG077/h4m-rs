@@ -1,4 +1,5 @@
 //! Typed picture syntax. Raw codes are interpreted once, at the bitstream boundary.
+
 use crate::error::{Error, Result};
 use core::ops::{Index, IndexMut};
 
@@ -15,6 +16,7 @@ pub(crate) struct Planes<T> {
     pub u: T,
     pub v: T,
 }
+
 impl<T> Planes<T> {
     pub fn from_fn(mut f: impl FnMut(PlaneId) -> T) -> Self {
         Self {
@@ -23,6 +25,7 @@ impl<T> Planes<T> {
             v: f(PlaneId::V),
         }
     }
+
     pub fn iter(&self) -> impl Iterator<Item = (PlaneId, &T)> {
         [
             (PlaneId::Y, &self.y),
@@ -31,6 +34,7 @@ impl<T> Planes<T> {
         ]
         .into_iter()
     }
+
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (PlaneId, &mut T)> {
         [
             (PlaneId::Y, &mut self.y),
@@ -40,6 +44,7 @@ impl<T> Planes<T> {
         .into_iter()
     }
 }
+
 impl<T> Index<PlaneId> for Planes<T> {
     type Output = T;
     fn index(&self, plane: PlaneId) -> &T {
@@ -50,6 +55,7 @@ impl<T> Index<PlaneId> for Planes<T> {
         }
     }
 }
+
 impl<T> IndexMut<PlaneId> for Planes<T> {
     fn index_mut(&mut self, plane: PlaneId) -> &mut T {
         match plane {
@@ -65,6 +71,7 @@ pub(crate) enum PlaneGroup {
     Luma,
     Chroma,
 }
+
 impl PlaneGroup {
     pub const ALL: [Self; 2] = [Self::Luma, Self::Chroma];
 }
@@ -83,8 +90,10 @@ pub(crate) enum PredictionTarget {
     Past = 1,
     Second = 2,
 }
+
 impl TryFrom<u8> for PredictionTarget {
     type Error = Error;
+
     fn try_from(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::Intra),
@@ -94,6 +103,7 @@ impl TryFrom<u8> for PredictionTarget {
         }
     }
 }
+
 impl PredictionTarget {
     pub fn reference(self) -> Option<Reference> {
         match self {
@@ -102,6 +112,7 @@ impl PredictionTarget {
             Self::Second => Some(Reference::Second),
         }
     }
+
     pub fn transition(self, backwards: bool) -> Self {
         match (self, backwards) {
             (Self::Intra, false) | (Self::Second, true) => Self::Past,
@@ -116,6 +127,7 @@ pub(crate) enum MotionMode {
     Residual,
     Copy,
 }
+
 impl MotionMode {
     pub fn toggle(self) -> Self {
         match self {
@@ -141,8 +153,10 @@ pub(crate) enum IntraBlock {
     Literal,
     Solid,
 }
+
 impl TryFrom<u8> for IntraBlock {
     type Error = Error;
+
     fn try_from(code: u8) -> Result<Self> {
         match code {
             0 => Ok(Self::Weighted),
@@ -160,8 +174,10 @@ pub(crate) enum PredictedBlock {
     Transform(u8),
     Literal,
 }
+
 impl TryFrom<u8> for PredictedBlock {
     type Error = Error;
+
     fn try_from(code: u8) -> Result<Self> {
         match code {
             0 => Ok(Self::Copy),
@@ -181,6 +197,7 @@ pub(crate) enum BlockCoding {
         block: PredictedBlock,
     },
 }
+
 impl BlockCoding {
     pub fn parse(mode: MacroblockMode, code: u8) -> Result<Self> {
         match mode {
@@ -191,6 +208,7 @@ impl BlockCoding {
             }),
         }
     }
+
     pub fn dc_neighbor(self) -> bool {
         matches!(self, Self::Intra(IntraBlock::Weighted | IntraBlock::Solid))
     }
@@ -206,6 +224,7 @@ pub struct BlockState {
     pub(crate) dc: u8,
     pub(crate) coding: BlockCoding,
 }
+
 impl BlockState {
     /// Initial value for arrays and other caller-owned storage.
     pub const EMPTY: Self = Self {
@@ -213,6 +232,7 @@ impl BlockState {
         coding: BlockCoding::Border,
     };
 }
+
 impl Default for BlockState {
     fn default() -> Self {
         Self::EMPTY
@@ -224,6 +244,7 @@ pub(crate) enum Orientation {
     Landscape,
     Portrait,
 }
+
 impl Orientation {
     pub fn nest_dimensions(self) -> (usize, usize) {
         match self {

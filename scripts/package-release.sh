@@ -34,7 +34,7 @@ cargo metadata --locked --offline --format-version 1 | jq --rawfile readme READM
 length_prefix() {
     local size escaped
     size=$(wc -c < "$1")
-    (( size < 4294967296 ))
+    ((size < 4294967296))
     printf -v escaped '\\x%02x\\x%02x\\x%02x\\x%02x' \
         "$((size & 255))" "$(((size >> 8) & 255))" \
         "$(((size >> 16) & 255))" "$(((size >> 24) & 255))"

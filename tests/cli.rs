@@ -31,7 +31,7 @@ fn extract_ppm_and_yuv() {
             fs::read_dir(&output).unwrap().count(),
             fixture.packets.len()
         );
-        let mut decoder = h4m::Decoder::new(&data[..]).unwrap();
+        let mut decoder = h4m::VideoDecoder::new(&data[..]).unwrap();
         let mut rgb = Vec::new();
         while let Some(frame) = decoder.next_frame().unwrap() {
             let mut expected = Vec::new();
@@ -42,7 +42,7 @@ fn extract_ppm_and_yuv() {
             }
             let extension = if yuv { "yuv" } else { "ppm" };
             let actual =
-                fs::read(output.join(format!("frame_{:010}.{extension}", frame.display_index)))
+                fs::read(output.join(format!("frame_{:010}.{extension}", frame.display_index())))
                     .unwrap();
             assert_eq!(actual, expected);
         }

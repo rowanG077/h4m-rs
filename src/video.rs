@@ -1,4 +1,5 @@
 //! Reusable decoder state and picture reconstruction orchestration.
+
 mod motion;
 mod plane;
 mod transform;
@@ -10,20 +11,20 @@ use crate::{
         BlockCoding, IntraBlock, MacroblockMode, MotionMode, MotionVector, Orientation, PlaneGroup,
         PlaneId, Planes, PredictedBlock, Reference,
     },
-    BlockState, BufferKind, Frame, FrameType, Limits, VideoInfo,
+    BlockState, BufferKind, Frame, FrameType, VideoInfo, VideoLimits,
 };
 use motion::MotionSample;
 use plane::{Layout, Plane};
 use transform::{intra_block, predicted_block, weighted, Nest};
 
-/// Reusable storage accepted by [`VideoDecoder::with_buffers`].
+/// Reusable storage accepted by [`VideoPacketDecoder::with_buffers`].
 ///
 /// Each frame needs `VideoInfo::buffer_requirements().frame_bytes` bytes;
 /// `blocks` needs `block_states` elements. Slices, arrays, and (with `alloc`)
 /// vectors all work. The decoder owns these handles for its lifetime, so its
 /// reference frames cannot accidentally be replaced between decode calls.
 /// Larger buffers are allowed; only the required prefixes are used.
-pub struct DecoderBuffers<F, B> {
+pub struct VideoBuffers<F, B> {
     /// Three independent, tightly packed Y/U/V frame buffers.
     pub frames: [F; 3],
     /// Reusable block-descriptor workspace.
@@ -36,6 +37,7 @@ struct Frames<F> {
     past: usize,
     future: usize,
 }
+
 impl<F> Frames<F> {
     fn begin(&mut self, kind: FrameType) -> [&mut F; 3] {
         if kind != FrameType::B {
@@ -45,6 +47,7 @@ impl<F> Frames<F> {
             .get_disjoint_mut([self.current, self.past, self.future])
             .expect("frame indices are distinct")
     }
+
     fn finish(&mut self, kind: FrameType) -> &F {
         match kind {
             FrameType::I | FrameType::P => {
@@ -63,6 +66,7 @@ enum DecodeState {
     TwoReferences,
     Failed,
 }
+
 impl DecodeState {
     fn after(self, kind: FrameType) -> Result<Self> {
         match (self, kind) {
@@ -82,10 +86,10 @@ impl DecodeState {
 /// Stateful, allocation-free decoder for demuxed video packets.
 ///
 /// [`Self::with_buffers`] accepts caller-owned storage and works without `alloc`
-/// or `std`. With the `alloc` feature, `VideoDecoder::new` allocates that storage once.
+/// or `std`. With the `alloc` feature, `VideoPacketDecoder::new` allocates that storage once.
 /// Decoding never allocates. Returned frames borrow reusable storage; copy them
 /// before the next call if needed. Packets omit the initial four-byte display ID.
-pub struct VideoDecoder<F, B> {
+pub struct VideoPacketDecoder<F, B> {
     info: VideoInfo,
     layouts: Planes<Layout>,
     frames: Frames<F>,
@@ -96,46 +100,69 @@ pub struct VideoDecoder<F, B> {
 }
 
 #[cfg(feature = "alloc")]
-impl VideoDecoder<alloc::vec::Vec<u8>, alloc::vec::Vec<BlockState>> {
+impl VideoPacketDecoder<alloc::vec::Vec<u8>, alloc::vec::Vec<BlockState>> {
     /// Allocate reusable buffers with the default resource limits.
     pub fn new(info: VideoInfo) -> Result<Self> {
-        Self::with_limits(info, Limits::default())
+        Self::with_limits(info, VideoLimits::default())
     }
+
     /// Allocate reusable buffers after checking explicit resource limits.
-    pub fn with_limits(info: VideoInfo, limits: Limits) -> Result<Self> {
+    pub fn with_limits(info: VideoInfo, limits: VideoLimits) -> Result<Self> {
         info.validate_limits(limits)?;
         let requirements = info.buffer_requirements();
-        Self::with_buffers(
+        Self::with_buffers_and_limits(
             info,
-            DecoderBuffers {
-                frames: core::array::from_fn(|_| alloc::vec![0; requirements.frame_bytes]),
-                blocks: alloc::vec![BlockState::EMPTY; requirements.block_states],
+            VideoBuffers {
+                frames: [
+                    crate::storage::filled_vec(requirements.frame_bytes, 0)?,
+                    crate::storage::filled_vec(requirements.frame_bytes, 0)?,
+                    crate::storage::filled_vec(requirements.frame_bytes, 0)?,
+                ],
+                blocks: crate::storage::filled_vec(requirements.block_states, BlockState::EMPTY)?,
             },
             limits,
         )
     }
 }
 
-impl<F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> VideoDecoder<F, B> {
+impl<F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> VideoPacketDecoder<F, B> {
+    /// Attach caller-owned buffers using default resource limits, without allocating.
+    pub fn with_buffers(info: VideoInfo, buffers: VideoBuffers<F, B>) -> Result<Self> {
+        Self::with_buffers_and_limits(info, buffers, VideoLimits::default())
+    }
+
     /// Validate and initialize caller-owned storage without allocating.
     ///
     /// Size checks happen before initialization. The used frame prefixes are
     /// cleared, and the descriptor workspace is reset. Retaining the buffers
     /// here keeps their reference-picture history valid across calls.
-    pub fn with_buffers(
+    pub fn with_buffers_and_limits(
         info: VideoInfo,
-        mut buffers: DecoderBuffers<F, B>,
-        limits: Limits,
+        mut buffers: VideoBuffers<F, B>,
+        limits: VideoLimits,
     ) -> Result<Self> {
         info.validate_limits(limits)?;
         let requirements = info.buffer_requirements();
-        for frame in &mut buffers.frames {
-            let provided = frame.as_mut().len().min(frame.as_ref().len());
+        // Hold each mutable view through validation and initialization, so an
+        // AsMut implementation cannot change its length between check and use.
+        for frame in &buffers.frames {
+            let provided = frame.as_ref().len();
             if provided < requirements.frame_bytes {
                 return Err(Error::BufferTooSmall {
                     buffer: BufferKind::Frame,
                     required: requirements.frame_bytes,
                     provided,
+                });
+            }
+        }
+        let [a, b, c] = &mut buffers.frames;
+        let mut frames = [a.as_mut(), b.as_mut(), c.as_mut()];
+        for frame in &frames {
+            if frame.len() < requirements.frame_bytes {
+                return Err(Error::BufferTooSmall {
+                    buffer: BufferKind::Frame,
+                    required: requirements.frame_bytes,
+                    provided: frame.len(),
                 });
             }
         }
@@ -148,8 +175,8 @@ impl<F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> VideoDecoder<F, B> {
             });
         }
         blocks[..requirements.block_states].fill(BlockState::EMPTY);
-        for frame in &mut buffers.frames {
-            frame.as_mut()[..requirements.frame_bytes].fill(0);
+        for frame in &mut frames {
+            frame[..requirements.frame_bytes].fill(0);
         }
         Ok(Self {
             info,
@@ -166,17 +193,20 @@ impl<F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> VideoDecoder<F, B> {
             max_packet: limits.max_frame_bytes,
         })
     }
+
     /// The validated layout used by this decoder.
-    pub fn info(&self) -> VideoInfo {
+    pub fn metadata(&self) -> VideoInfo {
         self.info
     }
+
     /// Recover the owned or borrowed buffers in their original order.
-    pub fn into_buffers(self) -> DecoderBuffers<F, B> {
-        DecoderBuffers {
+    pub fn into_buffers(self) -> VideoBuffers<F, B> {
+        VideoBuffers {
             frames: self.frames.buffers,
             blocks: self.blocks,
         }
     }
+
     /// Decode one packet without allocating or copying a complete frame.
     ///
     /// Any error poisons the decoder because references may be partly modified.
@@ -193,27 +223,50 @@ impl<F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> VideoDecoder<F, B> {
             return Err(Error::Limit("compressed frame size"));
         }
         let mut streams = Streams::new(packet, kind)?;
+        let requirements = self.info.buffer_requirements();
         let [current, past, future] = self.frames.begin(kind);
+        let destination = current.as_mut();
+        let past = past.as_ref();
+        let future = future.as_ref();
+        for provided in [destination.len(), past.len(), future.len()] {
+            if provided < requirements.frame_bytes {
+                return Err(Error::BufferTooSmall {
+                    buffer: BufferKind::Frame,
+                    required: requirements.frame_bytes,
+                    provided,
+                });
+            }
+        }
+        let blocks = self.blocks.as_mut();
+        if blocks.len() < requirements.block_states {
+            return Err(Error::BufferTooSmall {
+                buffer: BufferKind::BlockStates,
+                required: requirements.block_states,
+                provided: blocks.len(),
+            });
+        }
         let mut picture = Picture {
             info: self.info,
-            planes: plane::borrow_planes(&self.layouts, self.blocks.as_mut()),
-            destination: current.as_mut(),
-            past: past.as_ref(),
-            future: future.as_ref(),
+            planes: plane::borrow_planes(&self.layouts, blocks),
+            destination,
+            past,
+            future,
             nest: &mut self.nest,
         };
         match kind {
             FrameType::I => picture.intra(&mut streams)?,
             FrameType::P | FrameType::B => picture.inter(&mut streams, kind)?,
         }
-        self.state = next;
         let data = self.frames.finish(kind).as_ref();
-        Ok(Frame::new(
-            self.info,
-            kind,
-            display_index,
-            &data[..self.info.buffer_requirements().frame_bytes],
-        ))
+        let required = self.info.buffer_requirements().frame_bytes;
+        let data = data.get(..required).ok_or(Error::BufferTooSmall {
+            buffer: BufferKind::Frame,
+            required,
+            provided: data.len(),
+        })?;
+        let frame = Frame::new(self.info, kind, display_index, data)?;
+        self.state = next;
+        Ok(frame)
     }
 }
 
@@ -226,6 +279,7 @@ struct Picture<'a> {
     future: &'a [u8],
     nest: &'a mut [u8; 70 * 38],
 }
+
 impl Picture<'_> {
     fn orientation(&self) -> Orientation {
         if self.info.width() >= self.info.height() {
@@ -234,6 +288,7 @@ impl Picture<'_> {
             Orientation::Portrait
         }
     }
+
     fn set_block_types(
         &mut self,
         group: PlaneGroup,
@@ -256,12 +311,14 @@ impl Picture<'_> {
         }
         Ok(())
     }
+
     fn group_layout(&self, group: PlaneGroup) -> Layout {
         match group {
             PlaneGroup::Luma => self.planes.y.layout,
             PlaneGroup::Chroma => self.planes.u.layout,
         }
     }
+
     fn intra(&mut self, streams: &mut Streams<'_>) -> Result<()> {
         for group in PlaneGroup::ALL {
             let mut remaining = 0;
@@ -326,6 +383,7 @@ impl Picture<'_> {
         }
         Ok(())
     }
+
     fn make_nest(&mut self, x: usize, y: usize) -> Result<()> {
         let plane = &self.planes.y;
         let layout = plane.layout;
@@ -354,6 +412,7 @@ impl Picture<'_> {
         }
         Ok(())
     }
+
     fn descriptors(&mut self, streams: &mut Streams<'_>) -> Result<()> {
         let mut dc = Planes::from_fn(|_| 127u8);
         let (mut luma_run, mut chroma_run) = (0, 0);
@@ -394,6 +453,7 @@ impl Picture<'_> {
         }
         Ok(())
     }
+
     fn inter(&mut self, streams: &mut Streams<'_>, kind: FrameType) -> Result<()> {
         self.descriptors(streams)?;
         let orientation = self.orientation();

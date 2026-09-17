@@ -33,13 +33,25 @@ jobs:
       - name: Build, test, and compare with the reference (debug and release)
         run: nix flake check --no-update-lock-file --print-build-logs
       - run: nix develop --no-update-lock-file -c cargo test --locked
-      - run: nix develop --no-update-lock-file -c cargo fmt --all -- --check
+      - name: Check Rust formatting in both workspaces
+        run: |
+          nix develop --no-update-lock-file -c cargo fmt --all -- --check
+          nix develop --no-update-lock-file -c cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - name: Check Cargo manifest formatting
+        run: nix develop --no-update-lock-file -c taplo fmt --check Cargo.toml fuzz/Cargo.toml
       - name: Lint every feature layer
         run: |
           nix develop --no-update-lock-file -c cargo clippy --locked --all-targets -- -D warnings
-          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets --no-default-features -- -D warnings
-          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets --no-default-features --features alloc -- -D warnings
-      - run: nix develop --no-update-lock-file -c cargo doc --locked --no-deps
+          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets \
+            --no-default-features -- -D warnings
+          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets \
+            --no-default-features --features alloc -- -D warnings
+      - name: Document every feature layer
+        run: |
+          nix develop --no-update-lock-file -c cargo doc --locked --no-deps
+          nix develop --no-update-lock-file -c cargo doc --locked --no-deps --no-default-features
+          nix develop --no-update-lock-file -c cargo doc --locked --no-deps \
+            --no-default-features --features alloc
         env:
           RUSTDOCFLAGS: -D warnings
       - name: Check release automation

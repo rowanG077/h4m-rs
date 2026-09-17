@@ -1,8 +1,9 @@
 //! Caller-owned storage and container behavior, also run with no crate features.
+
 mod common;
 use h4m::{
-    BlockState, BufferKind, ChromaSampling, DecoderBuffers, Error, FrameType, Limits, SliceDecoder,
-    Version, VideoDecoder, VideoInfo,
+    BlockState, BufferKind, ChromaSampling, Error, FrameType, SliceVideoDecoder, Version,
+    VideoBuffers, VideoInfo, VideoLimits, VideoPacketDecoder,
 };
 
 fn info() -> VideoInfo {
@@ -22,30 +23,30 @@ fn every_fixture_decodes_with_borrowed_storage() {
         ];
         let mut blocks = vec![BlockState::EMPTY; requirements.block_states];
         let [a, b, c] = &mut frames;
-        let mut decoder = SliceDecoder::with_buffers(
+        let mut decoder = SliceVideoDecoder::with_buffers_and_limits(
             &input,
-            DecoderBuffers {
+            VideoBuffers {
                 frames: [a.as_mut_slice(), b.as_mut_slice(), c.as_mut_slice()],
                 blocks: blocks.as_mut_slice(),
             },
-            Limits::default(),
+            VideoLimits::default(),
         )
         .unwrap();
         #[cfg(feature = "std")]
-        let mut owned = h4m::Decoder::new(input.as_slice()).unwrap();
+        let mut owned = h4m::VideoDecoder::new(input.as_slice()).unwrap();
         let mut indices = Vec::new();
         while let Some(frame) = decoder.next_frame().unwrap() {
-            assert_eq!(frame.info, fixture.info);
+            assert_eq!(frame.info(), fixture.info);
             #[cfg(feature = "std")]
             {
                 let expected = owned.next_frame().unwrap().unwrap();
-                assert_eq!(frame.kind, expected.kind);
-                assert_eq!(frame.display_index, expected.display_index);
-                assert_eq!(frame.y.data, expected.y.data);
-                assert_eq!(frame.u.data, expected.u.data);
-                assert_eq!(frame.v.data, expected.v.data);
+                assert_eq!(frame.kind(), expected.kind());
+                assert_eq!(frame.display_index(), expected.display_index());
+                assert_eq!(frame.y().data(), expected.y().data());
+                assert_eq!(frame.u().data(), expected.u().data());
+                assert_eq!(frame.v().data(), expected.v().data());
             }
-            indices.push(frame.display_index);
+            indices.push(frame.display_index());
         }
         assert!(decoder.next_frame().unwrap().is_none());
         indices.sort_unstable();
@@ -70,20 +71,20 @@ fn stack_buffers_and_rgb_output_are_exact() {
     let mut b = [0; 384];
     let mut c = [0; 384];
     let mut blocks = [BlockState::EMPTY; 68];
-    let mut decoder = VideoDecoder::with_buffers(
+    let mut decoder = VideoPacketDecoder::with_buffers_and_limits(
         info,
-        DecoderBuffers {
+        VideoBuffers {
             frames: [&mut a[..], &mut b[..], &mut c[..]],
             blocks: &mut blocks[..],
         },
-        Limits::default(),
+        VideoLimits::default(),
     )
     .unwrap();
     let packet = common::intra(info, 2, 11, 0);
     let frame = decoder.decode(FrameType::I, 0, &packet).unwrap();
-    assert_eq!(frame.y.data[0], 151);
-    assert_eq!(frame.u.data[0], 222);
-    assert_eq!(frame.v.data[0], 37);
+    assert_eq!(frame.y().data()[0], 151);
+    assert_eq!(frame.u().data()[0], 222);
+    assert_eq!(frame.v().data()[0], 37);
     let mut short = [0xa5; 767];
     assert!(matches!(
         frame.to_rgb_into(&mut short),
@@ -103,13 +104,13 @@ fn stack_buffers_and_rgb_output_are_exact() {
 #[test]
 fn inline_arrays_stay_in_place_when_references_rotate() {
     let info = info();
-    let mut decoder = VideoDecoder::with_buffers(
+    let mut decoder = VideoPacketDecoder::with_buffers_and_limits(
         info,
-        DecoderBuffers {
+        VideoBuffers {
             frames: [[0xaa; 385], [0xbb; 385], [0xcc; 385]],
             blocks: [BlockState::EMPTY; 68],
         },
-        Limits::default(),
+        VideoLimits::default(),
     )
     .unwrap();
     let mut addresses = Vec::new();
@@ -128,10 +129,14 @@ fn inline_arrays_stay_in_place_when_references_rotate() {
         };
         let frame = decoder.decode(kind, 0, &packet).unwrap();
         assert_eq!(
-            [frame.y.data[0], frame.u.data[0], frame.v.data[0]],
+            [
+                frame.y().data()[0],
+                frame.u().data()[0],
+                frame.v().data()[0]
+            ],
             [151, 222, 37]
         );
-        addresses.push(frame.y.data.as_ptr());
+        addresses.push(frame.y().data().as_ptr());
     }
     // Each reference picture occupies a different buffer. B pictures reuse
     // the spare buffer without rotating the reference pictures.
@@ -161,13 +166,13 @@ fn small_storage_is_rejected_before_any_buffer_is_cleared() {
             &mut frame[..size]
         });
         assert!(matches!(
-            VideoDecoder::with_buffers(
+            VideoPacketDecoder::with_buffers_and_limits(
                 info(),
-                DecoderBuffers {
+                VideoBuffers {
                     frames: buffers,
                     blocks: &mut blocks[..]
                 },
-                Limits::default()
+                VideoLimits::default()
             ),
             Err(Error::BufferTooSmall {
                 buffer: BufferKind::Frame,
@@ -180,13 +185,13 @@ fn small_storage_is_rejected_before_any_buffer_is_cleared() {
     let mut blocks = [BlockState::EMPTY; 67];
     let [a, b, c] = &mut frames;
     assert!(matches!(
-        VideoDecoder::with_buffers(
+        VideoPacketDecoder::with_buffers_and_limits(
             info(),
-            DecoderBuffers {
+            VideoBuffers {
                 frames: [&mut a[..], &mut b[..], &mut c[..]],
                 blocks: &mut blocks[..]
             },
-            Limits::default()
+            VideoLimits::default()
         ),
         Err(Error::BufferTooSmall {
             buffer: BufferKind::BlockStates,
@@ -205,13 +210,13 @@ fn truncated_slice_input_and_invalid_packet_limits_are_sticky_errors() {
         let mut frames = [[0; 384]; 3];
         let mut blocks = [BlockState::EMPTY; 68];
         let [a, b, c] = &mut frames;
-        let mut decoder = SliceDecoder::with_buffers(
+        let mut decoder = SliceVideoDecoder::with_buffers_and_limits(
             &input[..end],
-            DecoderBuffers {
+            VideoBuffers {
                 frames: [&mut a[..], &mut b[..], &mut c[..]],
                 blocks: &mut blocks[..],
             },
-            Limits::default(),
+            VideoLimits::default(),
         )
         .unwrap();
         loop {
@@ -228,20 +233,19 @@ fn truncated_slice_input_and_invalid_packet_limits_are_sticky_errors() {
     let mut frames = [[0; 384]; 3];
     let mut blocks = [BlockState::EMPTY; 68];
     let [a, b, c] = &mut frames;
-    let mut decoder = SliceDecoder::with_buffers(
-        &input,
-        DecoderBuffers {
-            frames: [&mut a[..], &mut b[..], &mut c[..]],
-            blocks: &mut blocks[..],
-        },
-        Limits::default(),
-    )
-    .unwrap();
     assert!(matches!(
-        decoder.next_frame(),
-        Err(Error::Invalid("packet exceeds declared maximum"))
+        SliceVideoDecoder::with_buffers_and_limits(
+            &input,
+            VideoBuffers {
+                frames: [&mut a[..], &mut b[..], &mut c[..]],
+                blocks: &mut blocks[..]
+            },
+            VideoLimits::default(),
+        ),
+        Err(Error::Invalid(
+            "video packet maximum cannot hold display index"
+        ))
     ));
-    assert!(matches!(decoder.next_frame(), Err(Error::Failed)));
 }
 
 #[test]

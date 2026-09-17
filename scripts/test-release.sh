@@ -6,7 +6,8 @@ source_root=$(cd "$(dirname "$0")/.." && pwd)
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 mkdir -p "$temporary/repo/src" "$temporary/repo/scripts" "$temporary/bin"
-cp "$source_root"/scripts/{release-metadata,release-pr,package-release,download-release,publish-release}.sh "$temporary/repo/scripts/"
+cp "$source_root"/scripts/{release-metadata,release-pr,package-release,download-release,publish-release}.sh \
+    "$temporary/repo/scripts/"
 cd "$temporary/repo"
 export REAL_CARGO
 REAL_CARGO=$(command -v cargo)
@@ -17,7 +18,7 @@ export MOCK_RUN=99 MOCK_SENT="$temporary/sent-upload"
 : > "$MOCK_LOG"
 : > src/lib.rs
 printf '# Test crate\n\nUTF-8: café\n' > README.md
-cat > Cargo.toml <<'MANIFEST'
+cat > Cargo.toml << 'MANIFEST'
 [package]
 name = "h4m"
 version = "0.1.0"
@@ -50,7 +51,7 @@ sed 's/0.1.0/0.0.1/' "$temporary/lock" > Cargo.lock
 expect_failure ./scripts/release-metadata.sh check v0.1.0
 cp "$temporary/lock" Cargo.lock
 
-cat > CHANGELOG.md <<'CHANGELOG'
+cat > CHANGELOG.md << 'CHANGELOG'
 # Changelog
 
 ## Unreleased
@@ -81,13 +82,16 @@ expect_failure ./scripts/release-metadata.sh check v0.3.0-rc.1
 cp "$temporary/changelog" CHANGELOG.md
 
 # Everything below exercises the real scripts with fake GitHub/Cargo uploads.
-cat > "$temporary/bin/gh" <<'MOCK'
+cat > "$temporary/bin/gh" << 'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_LOG"
 if [[ $1 == run && $2 == download ]]; then
-    while (( $# )); do
-        if [[ $1 == --dir ]]; then cp "$MOCK_ARTIFACT/"* "$2/"; break; fi
+    while (($#)); do
+        if [[ $1 == --dir ]]; then
+            cp "$MOCK_ARTIFACT/"* "$2/"
+            break
+        fi
         shift
     done
     exit
@@ -96,13 +100,22 @@ shift
 method=GET
 endpoint=
 input=
-while (( $# )); do
+while (($#)); do
     case "$1" in
-        --method) method=$2; shift 2 ;;
-        --input) input=$2; shift 2 ;;
-        --jq|-f|-F) shift 2 ;;
+        --method)
+            method=$2
+            shift 2
+            ;;
+        --input)
+            input=$2
+            shift 2
+            ;;
+        --jq | -f | -F) shift 2 ;;
         --*) shift ;;
-        *) endpoint=$1; shift ;;
+        *)
+            endpoint=$1
+            shift
+            ;;
     esac
 done
 case "$method ${endpoint#repos/example/h4m/}" in
@@ -118,24 +131,39 @@ case "$method ${endpoint#repos/example/h4m/}" in
         printf 'tree-sha'
         ;;
     'POST git/commits') printf '%s' "$MOCK_TAG_COMMIT" ;;
-    'POST pulls'|'PATCH releases/42') printf 'https://github.com/example/h4m/example\n' ;;
-    'POST git/refs'|'PATCH git/refs/'*|'POST actions/workflows/ci.yml/dispatches') ;;
-    *) echo "Unexpected GitHub API call: $method $endpoint" >&2; exit 1 ;;
+    'POST pulls' | 'PATCH releases/42') printf 'https://github.com/example/h4m/example\n' ;;
+    'POST git/refs' | 'PATCH git/refs/'* | 'POST actions/workflows/ci.yml/dispatches') ;;
+    *)
+        echo "Unexpected GitHub API call: $method $endpoint" >&2
+        exit 1
+        ;;
 esac
 MOCK
-cat > "$temporary/bin/curl" <<'MOCK'
+cat > "$temporary/bin/curl" << 'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 method=GET
 output=
 payload=
 user_agent=
-while (( $# )); do
+while (($#)); do
     case "$1" in
-        --request) method=$2; shift 2 ;;
-        --output) output=$2; shift 2 ;;
-        --data-binary) payload=${2#@}; shift 2 ;;
-        --user-agent) user_agent=$2; shift 2 ;;
+        --request)
+            method=$2
+            shift 2
+            ;;
+        --output)
+            output=$2
+            shift 2
+            ;;
+        --data-binary)
+            payload=${2#@}
+            shift 2
+            ;;
+        --user-agent)
+            user_agent=$2
+            shift 2
+            ;;
         *) shift ;;
     esac
 done
@@ -158,7 +186,7 @@ fi
 printf '{"version":{"checksum":"%s"}}' "${MOCK_CHECKSUM:-}" > "$output"
 printf '%s' "$MOCK_STATUS"
 MOCK
-cat > "$temporary/bin/cargo" <<'MOCK'
+cat > "$temporary/bin/cargo" << 'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${FORBID_CARGO:-0} == 1 ]]; then

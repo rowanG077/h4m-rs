@@ -9,11 +9,14 @@ pub enum Error {
     /// The input could not be read or output could not be written.
     #[cfg(feature = "std")]
     Io(io::Error),
+    /// Storage could not be allocated or its capacity cannot be represented.
+    #[cfg(feature = "alloc")]
+    Allocation(alloc::collections::TryReserveError),
     /// The input ended inside a header or compressed stream.
     Truncated,
     /// The input violates the format or uses an unsupported coding mode.
     Invalid(&'static str),
-    /// A configured resource limit was exceeded.
+    /// A resource or platform representability limit was exceeded.
     Limit(&'static str),
     /// Decoding previously failed; construct a new decoder to resume.
     Failed,
@@ -33,6 +36,8 @@ impl fmt::Display for Error {
         match self {
             #[cfg(feature = "std")]
             Self::Io(e) => e.fmt(f),
+            #[cfg(feature = "alloc")]
+            Self::Allocation(e) => e.fmt(f),
             Self::Truncated => f.write_str("truncated H4M data"),
             Self::Invalid(s) => write!(f, "invalid H4M data: {s}"),
             Self::Limit(s) => write!(f, "H4M resource limit exceeded: {s}"),
@@ -53,6 +58,10 @@ impl core::error::Error for Error {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         #[cfg(feature = "std")]
         if let Self::Io(error) = self {
+            return Some(error);
+        }
+        #[cfg(feature = "alloc")]
+        if let Self::Allocation(error) = self {
             return Some(error);
         }
         None
@@ -96,4 +105,13 @@ pub enum BufferKind {
     BlockStates,
     /// Packed RGB output bytes.
     Rgb,
+    /// Interleaved PCM16 audio output, measured in `i16` elements.
+    AudioPcm,
+}
+
+#[cfg(feature = "alloc")]
+impl From<alloc::collections::TryReserveError> for Error {
+    fn from(error: alloc::collections::TryReserveError) -> Self {
+        Self::Allocation(error)
+    }
 }

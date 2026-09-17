@@ -30,13 +30,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("too many arguments".into());
     }
-    let mut decoder = h4m::Decoder::new(BufReader::new(File::open(input)?))?;
+    let mut decoder = h4m::VideoDecoder::new(BufReader::new(File::open(input)?))?;
     fs::create_dir_all(&output)?;
     let mut rgb = Vec::new();
     let mut count = 0u64;
     while let Some(frame) = decoder.next_frame()? {
         let extension = if yuv { "yuv" } else { "ppm" };
-        let name = output.join(format!("frame_{:010}.{extension}", frame.display_index));
+        let name = output.join(format!("frame_{:010}.{extension}", frame.display_index()));
         // Refuse to overwrite existing output, including symlinks.
         let file = File::options().write(true).create_new(true).open(name)?;
         let mut writer = BufWriter::new(file);

@@ -27,7 +27,10 @@ case "$status" in
         : "${CARGO_REGISTRY_TOKEN:?Set the CARGO_REGISTRY_TOKEN Actions secret}"
         published=false
         ;;
-    *) echo "crates.io returned HTTP $status; refusing to publish" >&2; exit 1 ;;
+    *)
+        echo "crates.io returned HTTP $status; refusing to publish" >&2
+        exit 1
+        ;;
 esac
 
 # The request tag starts before the metadata commit. Retarget it after merge.

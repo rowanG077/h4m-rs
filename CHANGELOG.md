@@ -2,8 +2,56 @@
 
 ## Unreleased
 
-## 0.3.0
+### Added
 
+- Stereo HVQM4 IMA-ADPCM audio decoding with explicit one-based track selection:
+  `AudioPacketDecoder` and `SliceAudioDecoder` work without `std` or `alloc`;
+  `AudioDecoder<R: Read>` provides streaming I/O. `AudioInfo` exposes metadata
+  and buffer requirements before construction, and `AudioPacketMode` identifies
+  predictor initialization and continuation. Memory use is bounded per packet.
+- A raw PCM16 extraction example that refuses to overwrite existing files.
+- `VideoInfo::rgb_buffer_size()` and `Frame::rgb_buffer_size()` for sizing RGB
+  output, plus public `VideoInfo::validate_limits()` and
+  `Header::validate_video_limits()` for checking resource limits before allocation.
+
+### Changed
+
+- Rename video types to distinguish packet decoding from container reading:
+
+  | In 0.3.0               | New name                     |
+  | ---------------------- | ---------------------------- |
+  | `Decoder<R>`           | `VideoDecoder<R>`            |
+  | `VideoDecoder<F, B>`   | `VideoPacketDecoder<F, B>`   |
+  | `SliceDecoder`         | `SliceVideoDecoder`          |
+  | `OwnedVideoDecoder`    | `OwnedVideoPacketDecoder`    |
+  | `BorrowedVideoDecoder` | `BorrowedVideoPacketDecoder` |
+  | `Limits`               | `VideoLimits`                |
+  | `DecoderBuffers`       | `VideoBuffers`               |
+  | `BufferRequirements`   | `VideoBufferRequirements`    |
+
+- Video `with_buffers` constructors now use default limits. Use
+  `with_buffers_and_limits` to pass an explicit policy. The packet decoder's
+  `info()` becomes `metadata()`, also available on container decoders.
+- Replace public `Header`, `Frame`, and `Plane` fields with read-only accessors.
+  Use `Frame::from_planes()` to validate external planes before constructing a
+  frame, preventing malformed plane lengths from causing RGB conversion panics.
+  Header `audio_frames` becomes `audio_packets()`, and `max_frame_size` becomes
+  `max_video_packet_size()`.
+- Correct the header's `audio_channels` field to `audio_format()`: the encoded
+  byte identifies the codec, not the channel count. Obtain validated channel
+  counts through `Header::audio_info(track)?.channels()`.
+- `Frame::to_rgb()` now returns `Result<(), Error>`. Allocating constructors and
+  RGB conversion report allocator reservation failures as `Error::Allocation`.
+
+### Fixed
+
+- Apply `VideoLimits::max_frame_bytes` consistently to compressed picture payload,
+  excluding the four-byte display index, in both packet and container decoders.
+  Previously a container could reject a packet accepted with the same raw limit.
+- Return buffer errors instead of panicking when custom video storage exposes
+  undersized views after construction.
+
+## 0.3.0
 
 - Replace mutable numeric `VideoInfo` fields with a validated constructor,
   accessors, and `ChromaSampling`. Expose checked wire-code conversion for

@@ -1,4 +1,8 @@
-{ lib, clangStdenv, src }:
+{
+  lib,
+  clangStdenv,
+  src,
+}:
 
 clangStdenv.mkDerivation {
   pname = "h4m-reference";
@@ -27,6 +31,10 @@ clangStdenv.mkDerivation {
     homepage = "https://github.com/mbcgh/h4m-video-decoder";
     license = lib.licenses.lgpl2Plus;
     mainProgram = "h4m-original";
-    platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "aarch64-darwin"
+    ];
   };
 }

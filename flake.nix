@@ -13,33 +13,65 @@
     };
   };
 
-  outputs = { self, nixpkgs, fenix, h4m-reference }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      fenix,
+      h4m-reference,
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       manifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-      toolchains = forAllSystems (system:
-        let fenixpkgs = fenix.packages.${system};
-        in fenixpkgs.stable.withComponents [
-          "cargo" "rustc" "rust-src" "rustfmt" "clippy" "rust-analyzer"
-        ]);
+      toolchains = forAllSystems (
+        system:
+        let
+          fenixpkgs = fenix.packages.${system};
+        in
+        fenixpkgs.stable.withComponents [
+          "cargo"
+          "rustc"
+          "rust-src"
+          "rustfmt"
+          "clippy"
+          "rust-analyzer"
+        ]
+      );
       source = builtins.path {
         path = ./.;
         name = "h4m-source";
-        filter = path: type:
-          let name = baseNameOf path;
-          in !(builtins.elem name [ "target" "reference" ".git" ".agents" ".codex" "result" ])
-            && !(nixpkgs.lib.hasPrefix "result-" name);
+        filter =
+          path: type:
+          let
+            name = baseNameOf path;
+          in
+          !(builtins.elem name [
+            "target"
+            "reference"
+            ".git"
+            ".agents"
+            ".codex"
+            "result"
+          ])
+          && !(nixpkgs.lib.hasPrefix "result-" name);
       };
-    in {
-      packages = forAllSystems (system:
+    in
+    {
+      packages = forAllSystems (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
           rustPlatform = pkgs.makeRustPlatform {
             cargo = toolchains.${system};
             rustc = toolchains.${system};
           };
-        in {
+        in
+        {
           reference-decoder = pkgs.callPackage ./nix/reference-decoder.nix {
             src = h4m-reference;
           };
@@ -55,10 +87,14 @@
               platforms = systems;
             };
           };
-        });
-      checks = forAllSystems (system:
-        let packages = self.packages.${system};
-        in {
+        }
+      );
+      checks = forAllSystems (
+        system:
+        let
+          packages = self.packages.${system};
+        in
+        {
           package = packages.default;
           portable = packages.default.overrideAttrs {
             name = "h4m-portable";
@@ -86,16 +122,33 @@
               touch "$out"
             '';
           };
-        });
-      devShells = forAllSystems (system:
+        }
+      );
+      devShells = forAllSystems (
+        system:
         let
           pkgs = import nixpkgs { inherit system; };
           reference = self.packages.${system}.reference-decoder;
-          releaseTools = with pkgs; [ git gh jq curl ];
-        in {
+          releaseTools = with pkgs; [
+            git
+            gh
+            jq
+            curl
+          ];
+        in
+        {
           default = pkgs.mkShell {
-            packages = [ toolchains.${system} reference ] ++ releaseTools
-              ++ (with pkgs; [ clang actionlint shellcheck ]);
+            packages = [
+              toolchains.${system}
+              reference
+            ]
+            ++ releaseTools
+            ++ (with pkgs; [
+              clang
+              actionlint
+              shellcheck
+              taplo
+            ]);
             RUST_SRC_PATH = "${toolchains.${system}}/lib/rustlib/src/rust/library";
             H4M_REFERENCE = "${reference}/bin/h4m-original";
             H4M_REFERENCE_PLANES = "${reference}/bin/h4m-planes";
@@ -103,6 +156,7 @@
           release = pkgs.mkShellNoCC {
             packages = releaseTools;
           };
-        });
+        }
+      );
     };
 }

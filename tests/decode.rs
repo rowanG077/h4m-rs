@@ -1,25 +1,25 @@
-//! Decoder correctness and malformed-input regression tests.
+//! VideoDecoder correctness and malformed-input regression tests.
 #![cfg(feature = "std")]
 
 mod common;
 
-use h4m::{Decoder, Error, FrameType, Limits, Version, VideoDecoder, VideoInfo};
+use h4m::{Error, FrameType, Version, VideoDecoder, VideoInfo, VideoLimits, VideoPacketDecoder};
 
 #[test]
 fn synthetic_corpus_decodes() {
     for fixture in common::fixtures() {
         let data = common::container(&fixture, 2, true);
-        let mut decoder = Decoder::new(&data[..]).unwrap();
+        let mut decoder = VideoDecoder::new(&data[..]).unwrap();
         let mut seen = Vec::new();
         while let Some(frame) = decoder
             .next_frame()
             .unwrap_or_else(|e| panic!("{}: {e}", fixture.name))
         {
             assert_eq!(
-                frame.y.data.len(),
+                frame.y().data().len(),
                 fixture.info.width() as usize * fixture.info.height() as usize
             );
-            seen.push(frame.display_index);
+            seen.push(frame.display_index());
         }
         seen.sort_unstable();
         assert_eq!(
@@ -40,20 +40,20 @@ fn literal_pixels_and_prediction_are_exact() {
             h4m::ChromaSampling::try_from((hs, vs)).unwrap(),
         )
         .unwrap();
-        let mut decoder = VideoDecoder::new(info).unwrap();
+        let mut decoder = VideoPacketDecoder::new(info).unwrap();
         let packet = common::intra(info, 2, 11, 0);
         let frame = decoder.decode(FrameType::I, 0, &packet).unwrap();
         let mut original = Vec::new();
         frame.write_yuv(&mut original).unwrap();
-        for (plane, p) in [frame.y, frame.u, frame.v].iter().enumerate() {
-            for by in 0..p.height / 4 {
-                for bx in 0..p.width / 4 {
+        for (plane, p) in [frame.y(), frame.u(), frame.v()].iter().enumerate() {
+            for by in 0..p.height() / 4 {
+                for bx in 0..p.width() / 4 {
                     for y in 0..4 {
                         for x in 0..4 {
-                            let seed = by * (p.width / 4) + bx + 11;
+                            let seed = by * (p.width() / 4) + bx + 11;
                             let expected =
                                 ((seed * 37 + (y * 4 + x) * 19 + plane * 71) % 256) as u8;
-                            assert_eq!(p.data[(by * 4 + y) * p.width + bx * 4 + x], expected);
+                            assert_eq!(p.data()[(by * 4 + y) * p.width() + bx * 4 + x], expected);
                         }
                     }
                 }
@@ -75,7 +75,7 @@ fn every_truncation_is_an_error() {
     let data = common::container(&fixture, 1, true);
     for end in 0..data.len() {
         let result = (|| {
-            let mut d = Decoder::new(&data[..end])?;
+            let mut d = VideoDecoder::new(&data[..end])?;
             while d.next_frame()?.is_some() {}
             Ok::<_, Error>(())
         })();
@@ -92,26 +92,26 @@ fn limits_and_poisoning() {
     let fixture = common::fixtures().remove(0);
     let data = common::container(&fixture, 1, false);
     assert!(matches!(
-        Decoder::with_limits(
+        VideoDecoder::with_limits(
             &data[..],
-            Limits {
+            VideoLimits {
                 max_pixels: 1,
-                ..Limits::default()
+                ..VideoLimits::default()
             }
         ),
         Err(Error::Limit(_))
     ));
     assert!(matches!(
-        Decoder::with_limits(
+        VideoDecoder::with_limits(
             &data[..],
-            Limits {
+            VideoLimits {
                 max_frame_bytes: 1,
-                ..Limits::default()
+                ..VideoLimits::default()
             }
         ),
         Err(Error::Limit(_))
     ));
-    let mut d = VideoDecoder::new(fixture.info).unwrap();
+    let mut d = VideoPacketDecoder::new(fixture.info).unwrap();
     assert!(d.decode(FrameType::P, 0, &fixture.packets[0].data).is_err());
     assert!(matches!(
         d.decode(FrameType::I, 0, &fixture.packets[0].data),
@@ -131,9 +131,9 @@ fn malformed_inputs_do_not_panic() {
             let index = state as usize % bytes.len();
             bytes[index] ^= (state >> 24) as u8;
         }
-        if let Ok(mut d) = Decoder::with_limits(
+        if let Ok(mut d) = VideoDecoder::with_limits(
             &bytes[..],
-            Limits {
+            VideoLimits {
                 max_pixels: 65536,
                 max_frame_bytes: 65536,
             },
@@ -148,7 +148,7 @@ fn inter_packet_mutations_do_not_panic() {
     let fixture = common::fixtures().remove(7);
     let mut state = 0xabcdef01u32;
     for _ in 0..2000 {
-        let mut decoder = VideoDecoder::new(fixture.info).unwrap();
+        let mut decoder = VideoPacketDecoder::new(fixture.info).unwrap();
         decoder
             .decode(FrameType::I, 0, &fixture.packets[0].data)
             .unwrap();
@@ -181,9 +181,9 @@ fn invalid_headers_and_block_accounting_are_rejected() {
         let mut bytes = original.clone();
         bytes[offset] = byte;
         let result = (|| {
-            let mut d = Decoder::with_limits(
+            let mut d = VideoDecoder::with_limits(
                 &bytes[..],
-                Limits {
+                VideoLimits {
                     max_pixels: 65536,
                     max_frame_bytes: 65536,
                 },
@@ -204,7 +204,7 @@ fn p_picture_second_reference_uses_the_current_buffer() {
         h4m::ChromaSampling::try_from((2, 2)).unwrap(),
     )
     .unwrap();
-    let mut decoder = VideoDecoder::new(info).unwrap();
+    let mut decoder = VideoPacketDecoder::new(info).unwrap();
     let mut expected = Vec::new();
     decoder
         .decode(FrameType::I, 0, &common::intra(info, 2, 11, 0))

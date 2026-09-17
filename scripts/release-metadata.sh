@@ -77,6 +77,11 @@ case "$command" in
             exit 1
         fi
         ;;
-    notes) notes "$version" ;;
-    *) echo "Unknown release metadata command: $command" >&2; exit 1 ;;
+    notes)
+        notes "$version"
+        ;;
+    *)
+        echo "Unknown release metadata command: $command" >&2
+        exit 1
+        ;;
 esac
