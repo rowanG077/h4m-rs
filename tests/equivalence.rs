@@ -73,11 +73,21 @@ fn original_decoder_equivalence() {
                     .unwrap();
             let mut actual_yuv = Vec::new();
             frame.write_yuv(&mut actual_yuv).unwrap();
-            assert_eq!(
-                actual_yuv, expected_yuv,
-                "{} frame {}: YUV mismatch",
-                fixture.name, frame.display_index
-            );
+            assert_eq!(actual_yuv.len(), expected_yuv.len());
+            if let Some(first) = actual_yuv
+                .iter()
+                .zip(&expected_yuv)
+                .position(|(a, b)| a != b)
+            {
+                panic!(
+                    "{} frame {} {:?}: YUV byte {first}, Rust {}, C {}",
+                    fixture.name,
+                    frame.display_index,
+                    frame.kind,
+                    actual_yuv[first],
+                    expected_yuv[first]
+                );
+            }
             frames += 1;
         }
         fs::remove_dir_all(&dir).unwrap();

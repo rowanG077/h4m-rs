@@ -79,6 +79,19 @@ Nix fetches [mbcgh/h4m-video-decoder](https://github.com/mbcgh/h4m-video-decoder
 at the fixed revision `02d66526e62e346c3ef7f92eac49cc07356a2c62`
 as the reference decoder to test.
 
+To compare a local collection of original movies, including every disc, run:
+
+```sh
+H4M_ORIGINALS=/path/to/extracted/discs nix develop -c ./scripts/test-originals.sh
+```
+
+This recursively discovers every `.h4m` file (case insensitive), checks every
+Y/U/V byte and presentation index against the pinned C decoder, and verifies
+frame counts. Both decoders stream frames, so it needs no decoded-movie files.
+The test fails if the directory contains no movies. Original assets are supplied
+locally and are never included in the repository or crate; this opt-in test is
+separate from the synthetic reference comparisons run in CI.
+
 Release instructions are in [RELEASING.md](RELEASING.md).
 
 ## License

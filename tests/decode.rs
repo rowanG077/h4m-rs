@@ -193,3 +193,35 @@ fn invalid_headers_and_block_accounting_are_rejected() {
         assert!(result.is_err(), "invalid byte at {offset} was accepted");
     }
 }
+
+#[test]
+fn p_picture_second_reference_uses_the_current_buffer() {
+    let info = VideoInfo {
+        version: Version::V15,
+        width: 32,
+        height: 16,
+        horizontal_sampling: 2,
+        vertical_sampling: 2,
+    };
+    let mut decoder = VideoDecoder::new(info).unwrap();
+    let mut expected = Vec::new();
+    decoder
+        .decode(FrameType::I, 0, &common::intra(info, 2, 11, 0))
+        .unwrap()
+        .write_yuv(&mut expected)
+        .unwrap();
+    for (index, seed) in [(1, 19), (2, 31)] {
+        decoder
+            .decode(FrameType::I, index, &common::intra(info, 2, seed, 0))
+            .unwrap();
+    }
+    // The rotating destination now holds I0; the other two references hold
+    // I1 and I2. Copying the current buffer must preserve I0 exactly.
+    let mut actual = Vec::new();
+    decoder
+        .decode(FrameType::P, 3, &common::inter(info, false, 4, 0, 0))
+        .unwrap()
+        .write_yuv(&mut actual)
+        .unwrap();
+    assert_eq!(actual, expected);
+}

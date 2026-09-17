@@ -328,9 +328,6 @@ impl VideoDecoder {
                     }
                     continue;
                 }
-                if target == 2 && frame_type == FrameType::P {
-                    return Err(Error::Invalid("future reference in P frame"));
-                }
                 let selected = usize::from(target - 1);
                 if selected != reference {
                     reference = selected;
@@ -341,7 +338,6 @@ impl VideoDecoder {
                 }
                 let rx = mx as i32 * 16 + motion[0];
                 let ry = my as i32 * 16 + motion[1];
-                let source = if reference == 0 { past } else { future };
                 let nest_origin = if landscape {
                     i64::from(rx / 2 - 32) + i64::from(ry / 2 - 16) * i64::from(self.info.width)
                 } else {
@@ -358,18 +354,30 @@ impl VideoDecoder {
                     for sub in 0..p.count() {
                         let (x, y) = p.macroblock(mx, my, sub);
                         let kind = p.blocks[p.index(x, y)].kind & 15;
+                        let (bx, by) = p.macroblock(0, 0, sub);
+                        let source_x = (px >> 1) + (bx * 4) as i32;
+                        let source_y = (py >> 1) + (by * 4) as i32;
+                        if kind == 0 && reference == 1 && frame_type == FrameType::P {
+                            // Plain motion copies update pixels in raster order.
+                            // Overlapping source regions must see earlier writes,
+                            // including those within this same 4x4 block.
+                            motion_block_in_place(dst, p, (x, y), (source_x, source_y), (hx, hy))?;
+                            continue;
+                        }
+                        // The reference decoder passes the destination itself as
+                        // the second reference for P pictures. Read it per block
+                        // so previously reconstructed blocks remain visible.
+                        let source: &[u8] = if reference == 0 {
+                            past
+                        } else if frame_type == FrameType::P {
+                            dst
+                        } else {
+                            future
+                        };
                         let pixels = if kind == 6 {
                             literal(streams, i)?
                         } else {
-                            let (bx, by) = p.macroblock(0, 0, sub);
-                            let predicted = motion_block(
-                                source,
-                                p,
-                                (px >> 1) + (bx * 4) as i32,
-                                (py >> 1) + (by * 4) as i32,
-                                hx,
-                                hy,
-                            )?;
+                            let predicted = motion_block(source, p, source_x, source_y, hx, hy)?;
                             if kind == 0 {
                                 predicted
                             } else {
@@ -538,11 +546,8 @@ fn motion_block(
     hx: usize,
     hy: usize,
 ) -> Result<[u8; 16]> {
-    if x < 0 || y < 0 || x as usize + 4 + hx > p.width || y as usize + 4 + hy > p.height {
-        return Err(Error::Invalid("motion vector outside reference plane"));
-    }
+    let start = motion_origin(p, x, y, hx, hy)?;
     let mut out = [0; 16];
-    let start = p.offset + y as usize * p.width + x as usize;
     for row in 0..4 {
         let pos = start + row * p.width;
         if hx == 0 && hy == 0 {
@@ -559,6 +564,35 @@ fn motion_block(
         }
     }
     Ok(out)
+}
+
+fn motion_origin(p: &Plane, x: i32, y: i32, hx: usize, hy: usize) -> Result<usize> {
+    if x < 0 || y < 0 || x as usize + 4 + hx > p.width || y as usize + 4 + hy > p.height {
+        return Err(Error::Invalid("motion vector outside reference plane"));
+    }
+    Ok(p.offset + y as usize * p.width + x as usize)
+}
+
+fn motion_block_in_place(
+    dst: &mut [u8],
+    p: &Plane,
+    block: (usize, usize),
+    source: (i32, i32),
+    half: (usize, usize),
+) -> Result<()> {
+    let start = motion_origin(p, source.0, source.1, half.0, half.1)?;
+    let target = p.offset + block.1 * 4 * p.width + block.0 * 4;
+    for row in 0..4 {
+        for col in 0..4 {
+            let at = start + row * p.width + col;
+            let sum = u16::from(dst[at])
+                + u16::from(dst[at + half.0])
+                + u16::from(dst[at + half.1 * p.width])
+                + u16::from(dst[at + half.1 * p.width + half.0]);
+            dst[target + row * p.width + col] = ((sum + 2) >> 2) as u8;
+        }
+    }
+    Ok(())
 }
 
 fn predicted_block(

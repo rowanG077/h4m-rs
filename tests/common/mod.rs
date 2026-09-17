@@ -226,7 +226,9 @@ pub fn inter(info: VideoInfo, bframe: bool, mode: usize, seed: usize, residual: 
     let mut procs = Vec::new();
     let mut desc = Vec::new();
     for n in 0..mw * mh {
-        let target = if mode == 0 {
+        let target = if mode == 4 {
+            2
+        } else if mode == 0 {
             1
         } else if mode == 1 || n % 7 == 2 {
             0
@@ -235,7 +237,7 @@ pub fn inter(info: VideoInfo, bframe: bool, mode: usize, seed: usize, residual: 
         } else {
             1
         };
-        let proc = if mode == 0 {
+        let proc = if mode == 0 || mode == 4 {
             1
         } else if mode == 2 {
             0
@@ -289,8 +291,25 @@ pub fn inter(info: VideoInfo, bframe: bool, mode: usize, seed: usize, residual: 
             }
             let x = n % mw;
             let y = n / mw;
-            let desired = if mode == 0 || mode == 2 {
+            let desired = if mode == 0 || mode == 2 || mode == 4 {
                 [0, 0]
+            } else if mode >= 5 {
+                [
+                    if mode == 6 {
+                        0
+                    } else if x == mw - 1 {
+                        -3
+                    } else {
+                        3
+                    },
+                    if mode == 5 {
+                        0
+                    } else if y == mh - 1 {
+                        -3
+                    } else {
+                        3
+                    },
+                ]
             } else {
                 [
                     if x == mw - 1 { -4 } else { 3 },
@@ -421,6 +440,41 @@ pub fn fixtures() -> Vec<Fixture> {
                 data: constant_intra(),
             }],
         });
+    }
+    for version in [Version::V13, Version::V15] {
+        for (hs, vs) in [(1, 1), (2, 1), (2, 2)] {
+            let info = VideoInfo {
+                version,
+                width: 32,
+                height: 32,
+                horizontal_sampling: hs,
+                vertical_sampling: vs,
+            };
+            for mode in 2..8 {
+                let mut packets: Vec<_> = [11, 19, 31]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, seed)| Packet {
+                        kind: FrameType::I,
+                        display: index as u32,
+                        data: intra(info, 2, seed, 0),
+                    })
+                    .collect();
+                for index in 3..6 {
+                    packets.push(Packet {
+                        kind: FrameType::P,
+                        display: index,
+                        // Encode second-reference selectors in a P picture.
+                        data: inter(info, true, mode, index as usize * 7, 1),
+                    });
+                }
+                out.push(Fixture {
+                    name: format!("{version:?}-p-current-{hs}-{vs}-mode-{mode}"),
+                    info,
+                    packets,
+                });
+            }
+        }
     }
     out
 }
