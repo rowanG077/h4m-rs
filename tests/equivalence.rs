@@ -1,4 +1,5 @@
 //! Opt-in differential comparison against the pinned, original C decoder.
+#![cfg(feature = "std")]
 
 mod common;
 
@@ -54,8 +55,8 @@ fn original_decoder_equivalence() {
                     .unwrap();
             let mut actual = Vec::new();
             frame.write_ppm(&mut actual, &mut rgb).unwrap();
-            if fixture.info.horizontal_sampling == 2
-                && fixture.info.vertical_sampling == 2
+            if fixture.info.sampling().horizontal_factor() == 2
+                && fixture.info.sampling().vertical_factor() == 2
                 && actual != expected
             {
                 let first = actual.iter().zip(&expected).position(|(a, b)| a != b);

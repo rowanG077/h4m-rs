@@ -1,7 +1,8 @@
 use crate::{
     error::{be16, be32, Result},
-    Error, Frame, FrameType, Limits, Version, VideoDecoder, VideoInfo,
+    BlockState, DecoderBuffers, Error, Frame, FrameType, Limits, Version, VideoDecoder, VideoInfo,
 };
+#[cfg(feature = "std")]
 use std::io::Read;
 
 /// Parsed 68-byte H4M file header.
@@ -48,13 +49,12 @@ impl Header {
             return Err(Error::Invalid("video mode"));
         }
         let result = Self {
-            video: VideoInfo {
+            video: VideoInfo::new(
                 version,
-                width: be16(data, 52)?,
-                height: be16(data, 54)?,
-                horizontal_sampling: data[56],
-                vertical_sampling: data[57],
-            },
+                be16(data, 52)?,
+                be16(data, 54)?,
+                (data[56], data[57]).try_into()?,
+            )?,
             body_size: be32(data, 20)?,
             blocks: be32(data, 24)?,
             video_frames: be32(data, 28)?,
@@ -71,167 +71,352 @@ impl Header {
     }
 }
 
-/// Streaming H4M container reader and video decoder.
+/// Decode a complete in-memory H4M file without an I/O or allocation dependency.
 ///
-/// Wrap files in [`std::io::BufReader`] for efficient small header reads. Audio
-/// packets are skipped without allocating them. Frames are returned in decoding
-/// order, with presentation indices exposed on [`Frame`].
-pub struct Decoder<R> {
-    reader: R,
-    header: Header,
-    video: VideoDecoder,
-    packet: Vec<u8>,
-    limits: Limits,
-    blocks_read: u32,
-    block_bytes: u32,
-    block_video: u32,
-    block_audio: u32,
-    block_video_total: u32,
-    gop_start: u32,
-    video_read: u32,
-    audio_read: u32,
-    failed: bool,
-    finished: bool,
+/// Input packets are borrowed directly. Frame buffers and block workspace are
+/// supplied to [`Self::with_buffers`]; no allocation occurs while decoding.
+pub struct SliceDecoder<'input, F, B> {
+    inner: ContainerDecoder<SliceSource<'input>, F, B>,
+}
+impl<'input, F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> SliceDecoder<'input, F, B> {
+    /// Read the header and initialize caller-owned decoder buffers.
+    pub fn with_buffers(
+        input: &'input [u8],
+        buffers: DecoderBuffers<F, B>,
+        limits: Limits,
+    ) -> Result<Self> {
+        let header = Header::parse(input)?;
+        validate_packet_limit(header, limits)?;
+        let video = VideoDecoder::with_buffers(header.video, buffers, limits)?;
+        Ok(Self {
+            inner: ContainerDecoder::new(
+                header,
+                SliceSource {
+                    remaining: &input[68..],
+                },
+                video,
+                limits,
+            )?,
+        })
+    }
+    /// Parsed file metadata.
+    pub fn header(&self) -> &Header {
+        &self.inner.demux.header
+    }
+    /// Decode the next frame in decoding order, or `None` after the last block.
+    /// An error permanently invalidates this instance.
+    pub fn next_frame(&mut self) -> Result<Option<Frame<'_>>> {
+        self.inner.next_frame()
+    }
+    /// Recover the unconsumed input, including any trailing data, and storage.
+    pub fn into_inner(self) -> (&'input [u8], DecoderBuffers<F, B>) {
+        (
+            self.inner.demux.source.remaining,
+            self.inner.video.into_buffers(),
+        )
+    }
 }
 
+/// Streaming H4M decoder with reusable, allocated buffers.
+///
+/// Available with `std`. Wrap files in `BufReader` for efficient small reads.
+/// Construction allocates the packet, frame, and descriptor buffers once;
+/// decoding does not grow them. Use [`SliceDecoder`] for caller-owned buffers
+/// and in-memory input without `std` or `alloc`.
+#[cfg(feature = "std")]
+pub struct Decoder<R> {
+    inner: ContainerDecoder<ReaderSource<R>, alloc::vec::Vec<u8>, alloc::vec::Vec<BlockState>>,
+}
+#[cfg(feature = "std")]
 impl<R: Read> Decoder<R> {
-    /// Read the file header and initialize the decoder with default limits.
+    /// Initialize a streaming decoder with default resource limits.
     pub fn new(reader: R) -> Result<Self> {
         Self::with_limits(reader, Limits::default())
     }
-
-    /// Read the file header using explicit allocation limits.
+    /// Read the header and allocate storage after validating resource limits.
     pub fn with_limits(mut reader: R, limits: Limits) -> Result<Self> {
         let mut bytes = [0; 68];
         reader.read_exact(&mut bytes)?;
         let header = Header::parse(&bytes)?;
+        validate_packet_limit(header, limits)?;
         let video = VideoDecoder::with_limits(header.video, limits)?;
-        Ok(Self {
+        let source = ReaderSource {
             reader,
-            header,
-            video,
-            limits,
-            packet: Vec::new(),
-            blocks_read: 0,
-            block_bytes: 0,
-            block_video: 0,
-            block_audio: 0,
-            block_video_total: 0,
-            gop_start: 0,
-            video_read: 0,
-            audio_read: 0,
-            failed: false,
-            finished: false,
+            scratch: alloc::vec![0; (header.max_frame_size as usize).max(20)],
+        };
+        Ok(Self {
+            inner: ContainerDecoder::new(header, source, video, limits)?,
         })
     }
-
-    /// File metadata.
+    /// Parsed file metadata.
     pub fn header(&self) -> &Header {
-        &self.header
+        &self.inner.demux.header
     }
-
-    /// Consume the decoder and recover its input reader.
+    /// Recover the reader, leaving trailing container data unread.
     pub fn into_inner(self) -> R {
-        self.reader
+        self.inner.demux.source.reader
     }
-
-    /// Decode the next video frame. Returns `None` after all declared blocks.
-    ///
-    /// After an error the decoder is unusable and returns [`Error::Failed`].
-    /// Container padding or trailing data beyond the declared blocks is left unread.
+    /// Decode the next frame, or `None` after all declared blocks.
+    /// After an error, subsequent calls return [`Error::Failed`].
     pub fn next_frame(&mut self) -> Result<Option<Frame<'_>>> {
-        if self.failed {
-            return Err(Error::Failed);
+        self.inner.next_frame()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DecodeState {
+    Ready,
+    Finished,
+    Failed,
+}
+struct ContainerDecoder<S, F, B> {
+    demux: Demuxer<S>,
+    video: VideoDecoder<F, B>,
+    state: DecodeState,
+}
+impl<S: Source, F: AsRef<[u8]> + AsMut<[u8]>, B: AsMut<[BlockState]>> ContainerDecoder<S, F, B> {
+    fn new(header: Header, source: S, video: VideoDecoder<F, B>, limits: Limits) -> Result<Self> {
+        validate_packet_limit(header, limits)?;
+        Ok(Self {
+            demux: Demuxer {
+                source,
+                header,
+                block: None,
+                blocks_read: 0,
+                read: PacketCounts::default(),
+            },
+            video,
+            state: DecodeState::Ready,
+        })
+    }
+    fn next_frame(&mut self) -> Result<Option<Frame<'_>>> {
+        match self.state {
+            DecodeState::Failed => return Err(Error::Failed),
+            DecodeState::Finished => return Ok(None),
+            DecodeState::Ready => {}
         }
-        if self.finished {
-            return Ok(None);
+        self.state = DecodeState::Failed;
+        match self.demux.next_video()? {
+            None => {
+                self.state = DecodeState::Finished;
+                Ok(None)
+            }
+            Some(packet) => {
+                let frame = self
+                    .video
+                    .decode(packet.kind, packet.display_index, packet.data)?;
+                self.state = DecodeState::Ready;
+                Ok(Some(frame))
+            }
         }
-        self.failed = true;
+    }
+}
+fn validate_packet_limit(header: Header, limits: Limits) -> Result<()> {
+    if header.max_frame_size as usize > limits.max_frame_bytes {
+        return Err(Error::Limit("compressed frame size"));
+    }
+    Ok(())
+}
+
+/// The demuxer asks for short-lived input slices; slice input borrows directly,
+/// while the std adapter fills its one preallocated scratch buffer.
+trait Source {
+    fn read_bytes(&mut self, size: usize) -> Result<&[u8]>;
+    fn skip(&mut self, size: usize) -> Result<()>;
+}
+struct SliceSource<'a> {
+    remaining: &'a [u8],
+}
+impl Source for SliceSource<'_> {
+    fn read_bytes(&mut self, size: usize) -> Result<&[u8]> {
+        let (bytes, rest) = self
+            .remaining
+            .split_at_checked(size)
+            .ok_or(Error::Truncated)?;
+        self.remaining = rest;
+        Ok(bytes)
+    }
+    fn skip(&mut self, size: usize) -> Result<()> {
+        self.read_bytes(size).map(|_| ())
+    }
+}
+#[cfg(feature = "std")]
+struct ReaderSource<R> {
+    reader: R,
+    scratch: alloc::vec::Vec<u8>,
+}
+#[cfg(feature = "std")]
+impl<R: Read> Source for ReaderSource<R> {
+    fn read_bytes(&mut self, size: usize) -> Result<&[u8]> {
+        let target = self
+            .scratch
+            .get_mut(..size)
+            .ok_or(Error::Invalid("packet exceeds declared maximum"))?;
+        self.reader.read_exact(target)?;
+        Ok(target)
+    }
+    fn skip(&mut self, mut size: usize) -> Result<()> {
+        while size != 0 {
+            let count = size.min(self.scratch.len());
+            self.reader.read_exact(&mut self.scratch[..count])?;
+            size -= count;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct PacketCounts {
+    video: u32,
+    audio: u32,
+}
+impl PacketCounts {
+    fn is_empty(&self) -> bool {
+        self.video == 0 && self.audio == 0
+    }
+}
+struct BlockProgress {
+    remaining_bytes: u32,
+    remaining: PacketCounts,
+    video_total: u32,
+    first_display_index: u32,
+}
+impl BlockProgress {
+    fn parse(bytes: &[u8], first_display_index: u32) -> Result<Self> {
+        if be32(bytes, 16)? != 0x01000000 {
+            return Err(Error::Invalid("container block marker"));
+        }
+        let video = be32(bytes, 8)?;
+        Ok(Self {
+            remaining_bytes: be32(bytes, 4)?,
+            remaining: PacketCounts {
+                video,
+                audio: be32(bytes, 12)?,
+            },
+            video_total: video,
+            first_display_index,
+        })
+    }
+    fn consume_packet(&mut self, size: u32) -> Result<()> {
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(8)
+            .ok_or(Error::Invalid("packet header exceeds block"))?;
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(size)
+            .ok_or(Error::Invalid("packet exceeds block"))?;
+        Ok(())
+    }
+}
+enum PacketKind {
+    Audio,
+    Video(FrameType),
+}
+struct PacketHeader {
+    kind: PacketKind,
+    size: u32,
+}
+impl PacketHeader {
+    fn parse(bytes: &[u8]) -> Result<Self> {
+        let kind = match be16(bytes, 0)? {
+            0 => PacketKind::Audio,
+            1 => PacketKind::Video(be16(bytes, 2)?.try_into()?),
+            _ => return Err(Error::Invalid("unknown packet kind")),
+        };
+        Ok(Self {
+            kind,
+            size: be32(bytes, 4)?,
+        })
+    }
+}
+struct VideoPacket<'a> {
+    kind: FrameType,
+    display_index: u32,
+    data: &'a [u8],
+}
+struct Demuxer<S> {
+    source: S,
+    header: Header,
+    block: Option<BlockProgress>,
+    blocks_read: u32,
+    read: PacketCounts,
+}
+impl<S: Source> Demuxer<S> {
+    fn next_video(&mut self) -> Result<Option<VideoPacket<'_>>> {
         loop {
-            if self.block_video == 0 && self.block_audio == 0 {
-                if self.block_bytes != 0 {
+            if self
+                .block
+                .as_ref()
+                .is_none_or(|block| block.remaining.is_empty())
+            {
+                if self
+                    .block
+                    .as_ref()
+                    .is_some_and(|block| block.remaining_bytes != 0)
+                {
                     return Err(Error::Invalid("container block size mismatch"));
                 }
                 if self.blocks_read == self.header.blocks {
-                    if self.video_read != self.header.video_frames
-                        || self.audio_read != self.header.audio_frames
+                    if self.read.video != self.header.video_frames
+                        || self.read.audio != self.header.audio_frames
                     {
                         return Err(Error::Invalid("total frame count mismatch"));
                     }
-                    self.finished = true;
-                    self.failed = false;
                     return Ok(None);
                 }
-                let mut bytes = [0; 20];
-                self.reader.read_exact(&mut bytes)?;
-                if be32(&bytes, 16)? != 0x01000000 {
-                    return Err(Error::Invalid("container block marker"));
-                }
-                self.block_bytes = be32(&bytes, 4)?;
-                self.block_video = be32(&bytes, 8)?;
-                self.block_audio = be32(&bytes, 12)?;
-                self.block_video_total = self.block_video;
-                self.gop_start = self.video_read;
-                if self.block_video > self.header.video_frames - self.video_read
-                    || self.block_audio > self.header.audio_frames - self.audio_read
+                let block = BlockProgress::parse(self.source.read_bytes(20)?, self.read.video)?;
+                if block.remaining.video > self.header.video_frames - self.read.video
+                    || block.remaining.audio > self.header.audio_frames - self.read.audio
                 {
                     return Err(Error::Invalid("block frame count exceeds file total"));
                 }
+                self.block = Some(block);
                 self.blocks_read += 1;
                 continue;
             }
-            if self.block_bytes < 8 {
+            let block = self
+                .block
+                .as_mut()
+                .ok_or(Error::Invalid("missing container block"))?;
+            if block.remaining_bytes < 8 {
                 return Err(Error::Invalid("packet header exceeds block"));
             }
-            let mut bytes = [0; 8];
-            self.reader.read_exact(&mut bytes)?;
-            let size = be32(&bytes, 4)?;
-            self.block_bytes -= 8;
-            if size > self.block_bytes {
-                return Err(Error::Invalid("packet exceeds block"));
-            }
-            self.block_bytes -= size;
-            match be16(&bytes, 0)? {
-                0 => {
-                    if self.block_audio == 0 {
-                        return Err(Error::Invalid("too many audio packets"));
-                    }
-                    let mut remaining = size as usize;
-                    let mut scratch = [0; 8192];
-                    while remaining > 0 {
-                        let n = remaining.min(scratch.len());
-                        self.reader.read_exact(&mut scratch[..n])?;
-                        remaining -= n;
-                    }
-                    self.block_audio -= 1;
-                    self.audio_read += 1;
+            let packet = PacketHeader::parse(self.source.read_bytes(8)?)?;
+            block.consume_packet(packet.size)?;
+            match packet.kind {
+                PacketKind::Audio => {
+                    block.remaining.audio = block
+                        .remaining
+                        .audio
+                        .checked_sub(1)
+                        .ok_or(Error::Invalid("too many audio packets"))?;
+                    self.source.skip(packet.size as usize)?;
+                    self.read.audio += 1;
                 }
-                1 => {
-                    if self.block_video == 0 {
+                PacketKind::Video(kind) => {
+                    if block.remaining.video == 0 {
                         return Err(Error::Invalid("too many video packets"));
                     }
-                    if size as usize > self.limits.max_frame_bytes {
-                        return Err(Error::Limit("compressed frame size"));
+                    if packet.size > self.header.max_frame_size {
+                        return Err(Error::Invalid("packet exceeds declared maximum"));
                     }
-                    let kind = FrameType::parse(be16(&bytes, 2)?)?;
-                    if self.video_read == self.gop_start && kind != FrameType::I {
+                    if block.remaining.video == block.video_total && kind != FrameType::I {
                         return Err(Error::Invalid("GOP must start with an I frame"));
                     }
-                    self.packet.resize(size as usize, 0);
-                    self.reader.read_exact(&mut self.packet)?;
-                    let display = be32(&self.packet, 0)?;
-                    if display >= self.block_video_total {
+                    let data = self.source.read_bytes(packet.size as usize)?;
+                    let display = be32(data, 0)?;
+                    if display >= block.video_total {
                         return Err(Error::Invalid("display index outside GOP"));
                     }
-                    self.block_video -= 1;
-                    self.video_read += 1;
-                    let frame =
-                        self.video
-                            .decode(kind, self.gop_start + display, &self.packet[4..])?;
-                    self.failed = false;
-                    return Ok(Some(frame));
+                    block.remaining.video -= 1;
+                    self.read.video += 1;
+                    return Ok(Some(VideoPacket {
+                        kind,
+                        display_index: block.first_display_index + display,
+                        data: &data[4..],
+                    }));
                 }
-                _ => return Err(Error::Invalid("unknown packet kind")),
             }
         }
     }

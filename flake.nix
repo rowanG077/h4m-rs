@@ -60,6 +60,18 @@
         let packages = self.packages.${system};
         in {
           package = packages.default;
+          portable = packages.default.overrideAttrs {
+            name = "h4m-portable";
+            checkPhase = ''
+              runHook preCheck
+              cargo test --locked --offline --no-default-features
+              cargo test --locked --offline --no-default-features --features alloc
+              runHook postCheck
+            '';
+            installPhase = ''
+              touch "$out"
+            '';
+          };
           equivalence = packages.default.overrideAttrs {
             name = "h4m-reference-equivalence";
             H4M_REFERENCE = "${packages.reference-decoder}/bin/h4m-original";

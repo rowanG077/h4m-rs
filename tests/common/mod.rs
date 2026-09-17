@@ -106,14 +106,17 @@ fn dims(info: VideoInfo, plane: usize) -> (usize, usize) {
     let hs = if plane == 0 {
         1
     } else {
-        info.horizontal_sampling as usize
+        info.sampling().horizontal_factor() as usize
     };
     let vs = if plane == 0 {
         1
     } else {
-        info.vertical_sampling as usize
+        info.sampling().vertical_factor() as usize
     };
-    (info.width as usize / hs / 4, info.height as usize / vs / 4)
+    (
+        info.width() as usize / hs / 4,
+        info.height() as usize / vs / 4,
+    )
 }
 
 fn type_symbol(s: &mut [Bits; 17], group: usize, value: u8) {
@@ -220,8 +223,8 @@ fn runs(bits: &mut Bits, values: &[u8], initial_bits: usize) {
 
 pub fn inter(info: VideoInfo, bframe: bool, mode: usize, seed: usize, residual: u8) -> Vec<u8> {
     let mut s = streams(true);
-    let mw = info.width as usize / 8;
-    let mh = info.height as usize / 8;
+    let mw = info.width() as usize / 8;
+    let mh = info.height() as usize / 8;
     let mut types = Vec::new();
     let mut procs = Vec::new();
     let mut desc = Vec::new();
@@ -253,7 +256,8 @@ pub fn inter(info: VideoInfo, bframe: bool, mode: usize, seed: usize, residual: 
             let count = if plane == 0 {
                 4
             } else {
-                4 / (info.horizontal_sampling as usize * info.vertical_sampling as usize)
+                4 / (info.sampling().horizontal_factor() as usize
+                    * info.sampling().vertical_factor() as usize)
             };
             for sub in 0..count {
                 let kind = if target != 0 && proc == 1 {
@@ -336,13 +340,13 @@ pub fn fixtures() -> Vec<Fixture> {
     let mut out = Vec::new();
     for version in [Version::V13, Version::V15] {
         for (width, height) in [(16, 16), (32, 16), (16, 32), (320, 168)] {
-            let info = VideoInfo {
+            let info = VideoInfo::new(
                 version,
                 width,
                 height,
-                horizontal_sampling: 2,
-                vertical_sampling: 2,
-            };
+                h4m::ChromaSampling::try_from((2, 2)).unwrap(),
+            )
+            .unwrap();
             for mode in 0..4 {
                 let packets = vec![Packet {
                     kind: FrameType::I,
@@ -393,13 +397,13 @@ pub fn fixtures() -> Vec<Fixture> {
     }
     for version in [Version::V13, Version::V15] {
         for (hs, vs) in [(1, 1), (2, 1)] {
-            let info = VideoInfo {
+            let info = VideoInfo::new(
                 version,
-                width: 32,
-                height: 32,
-                horizontal_sampling: hs,
-                vertical_sampling: vs,
-            };
+                32,
+                32,
+                h4m::ChromaSampling::try_from((hs, vs)).unwrap(),
+            )
+            .unwrap();
             for mode in 0..4 {
                 out.push(Fixture {
                     name: format!("{version:?}-sampling-{hs}-{vs}-mode-{mode}"),
@@ -424,13 +428,13 @@ pub fn fixtures() -> Vec<Fixture> {
                 });
             }
         }
-        let info = VideoInfo {
+        let info = VideoInfo::new(
             version,
-            width: 320,
-            height: 168,
-            horizontal_sampling: 2,
-            vertical_sampling: 2,
-        };
+            320,
+            168,
+            h4m::ChromaSampling::try_from((2, 2)).unwrap(),
+        )
+        .unwrap();
         out.push(Fixture {
             name: format!("{version:?}-constant-trees-runs"),
             info,
@@ -443,13 +447,13 @@ pub fn fixtures() -> Vec<Fixture> {
     }
     for version in [Version::V13, Version::V15] {
         for (hs, vs) in [(1, 1), (2, 1), (2, 2)] {
-            let info = VideoInfo {
+            let info = VideoInfo::new(
                 version,
-                width: 32,
-                height: 32,
-                horizontal_sampling: hs,
-                vertical_sampling: vs,
-            };
+                32,
+                32,
+                h4m::ChromaSampling::try_from((hs, vs)).unwrap(),
+            )
+            .unwrap();
             for mode in 2..8 {
                 let mut packets: Vec<_> = [11, 19, 31]
                     .into_iter()
@@ -525,7 +529,7 @@ pub fn container(fixture: &Fixture, gops: u32, audio: bool) -> Vec<u8> {
         body.extend_from_slice(&block);
     }
     let mut header = vec![0u8; 68];
-    header[..9].copy_from_slice(if fixture.info.version == Version::V13 {
+    header[..9].copy_from_slice(if fixture.info.version() == Version::V13 {
         b"HVQM4 1.3"
     } else {
         b"HVQM4 1.5"
@@ -549,10 +553,10 @@ pub fn container(fixture: &Fixture, gops: u32, audio: bool) -> Vec<u8> {
     ] {
         header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
     }
-    header[52..54].copy_from_slice(&fixture.info.width.to_be_bytes());
-    header[54..56].copy_from_slice(&fixture.info.height.to_be_bytes());
-    header[56] = fixture.info.horizontal_sampling;
-    header[57] = fixture.info.vertical_sampling;
+    header[52..54].copy_from_slice(&fixture.info.width().to_be_bytes());
+    header[54..56].copy_from_slice(&fixture.info.height().to_be_bytes());
+    header[56] = fixture.info.sampling().horizontal_factor();
+    header[57] = fixture.info.sampling().vertical_factor();
     header[60] = 1;
     header[61] = 16;
     header[64..68].copy_from_slice(&32000u32.to_be_bytes());

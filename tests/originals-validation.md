@@ -1,6 +1,8 @@
-# Original-movie validation for the 0.1.1 candidate
+# Original-movie validation for the 0.3.0 refactor
 
-Validated 2026-09-17 on the complete extracted movie directories of both Tales of
+Validated 2026-09-17 after rebasing the refactor onto released `v0.2.0`
+(`0f3097b5da6887a6c04501430fb96601efbf6bec`), using the complete extracted movie
+directories of both Tales of
 Symphonia discs: **11 files, 26,930 frames, 9,622,840,320 YUV bytes, zero differences**.
 Every file was decoded in full, including both distinct `op.h4m` files. Presentation
 indices, plane lengths, unique complete presentation ranges, and header frame
@@ -33,12 +35,30 @@ Reproduce with the complete extraction root, not an individual movie directory:
 H4M_ORIGINALS=/path/to/extracted/discs nix develop -c ./scripts/test-originals.sh
 ```
 
-Additional checks passed: all Rust unit/integration/doc tests, 916 synthetic
-frames against the C reference in both debug and release, strict Clippy, rustfmt,
-rustdoc with warnings denied, and the native Nix package and reference checks.
+Additional checks passed: Rust unit/integration/doc tests and strict Clippy with
+default features, no features, and `alloc` only; 916 synthetic frames against the
+C reference in both debug and release; rustfmt; rustdoc with warnings denied for
+all three feature configurations; workflow linting; package verification; and
+the native aarch64-linux Nix package, portability, and reference checks.
 The synthetic corpus covers current-reference P pictures for both HVQM versions
 and every supported sampling layout, including overlapping integer and
 horizontal/vertical/diagonal fractional motion and transformed/literal blocks.
 
-The release workflow will move the `Unreleased` changelog entries to `0.1.1`
-and update the package version when a `v0.1.1` release is requested.
+An external counting-allocator instrument also decoded all 26,930 frames through
+each interface on the same refactored source:
+
+- `SliceDecoder`: zero allocations during construction, decoding, and
+  `Frame::to_rgb_into`. Input, frame buffers, block workspace, and RGB output were
+  supplied before counting began.
+- Standard I/O `Decoder`: five allocations during construction (three frames,
+  one block workspace, one packet buffer), then zero during decoding. The caller's
+  `BufReader` was created before counting began.
+
+The instrument lives outside the crate; no unsafe allocator implementation or
+new dependency was added to the decoder. The permanent buffer tests also run
+without either `std` or `alloc` enabled, including stack-only frame storage,
+undersized buffers, truncation, packet limits, and poisoned-decoder behavior.
+
+P-picture fixes are already released in `0.2.0`. The breaking buffer/API refactor
+remains under `Unreleased`, targeting `0.3.0`; the release workflow updates the
+package version when that release is requested.

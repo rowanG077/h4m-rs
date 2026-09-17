@@ -1,4 +1,5 @@
 //! CLI extraction, presentation naming, and overwrite protection.
+#![cfg(feature = "std")]
 
 mod common;
 

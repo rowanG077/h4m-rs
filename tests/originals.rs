@@ -1,4 +1,5 @@
 //! Opt-in, bounded-memory differential comparison of a local original-movie corpus.
+#![cfg(feature = "std")]
 
 use std::{
     fs::{self, File},

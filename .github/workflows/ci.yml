@@ -34,7 +34,11 @@ jobs:
         run: nix flake check --no-update-lock-file --print-build-logs
       - run: nix develop --no-update-lock-file -c cargo test --locked
       - run: nix develop --no-update-lock-file -c cargo fmt --all -- --check
-      - run: nix develop --no-update-lock-file -c cargo clippy --locked --all-targets -- -D warnings
+      - name: Lint every feature layer
+        run: |
+          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets -- -D warnings
+          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets --no-default-features -- -D warnings
+          nix develop --no-update-lock-file -c cargo clippy --locked --all-targets --no-default-features --features alloc -- -D warnings
       - run: nix develop --no-update-lock-file -c cargo doc --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

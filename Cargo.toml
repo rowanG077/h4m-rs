@@ -21,13 +21,20 @@ include = [
     "/CHANGELOG.md",
 ]
 
+[features]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+
 [[bin]]
 name = "h4m"
 path = "src/bin/h4m.rs"
+required-features = ["std"]
 
 [[bench]]
 name = "decode"
 harness = false
+required-features = ["std"]
 
 [profile.release]
 lto = "thin"

@@ -14,13 +14,13 @@ fn main() {
     if !std::env::args().any(|arg| arg == "--bench") {
         return;
     }
-    let info = VideoInfo {
-        version: Version::V15,
-        width: 640,
-        height: 480,
-        horizontal_sampling: 2,
-        vertical_sampling: 2,
-    };
+    let info = VideoInfo::new(
+        Version::V15,
+        640,
+        480,
+        h4m::ChromaSampling::try_from((2, 2)).unwrap(),
+    )
+    .unwrap();
     for (label, intra_mode, inter_mode, rgb) in [
         ("I literal", 2, None, false),
         ("I mixed AOT", 3, None, false),
@@ -54,7 +54,7 @@ fn main() {
         let fps = frames as f64 / start.elapsed().as_secs_f64();
         println!(
             "{label:20} {fps:9.1} frames/s  {:8.1} megapixels/s  {:8.1} us/frame",
-            fps * f64::from(info.width) * f64::from(info.height) / 1e6,
+            fps * f64::from(info.width()) * f64::from(info.height()) / 1e6,
             1e6 / fps
         );
     }

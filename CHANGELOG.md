@@ -2,15 +2,26 @@
 
 ## Unreleased
 
-## 0.2.0
+- Replace mutable numeric `VideoInfo` fields with a validated constructor,
+  accessors, and `ChromaSampling`. Expose checked wire-code conversion for
+  `FrameType`.
+- Make `VideoDecoder` generic over owned or borrowed buffers. Add
+  `DecoderBuffers`, `BlockState`, buffer requirements, and owned/borrowed aliases.
+- Support `no_std` without `alloc`, with `alloc` and default `std` convenience
+  layers. Add an allocation-free `SliceDecoder` and `Frame::to_rgb_into`.
+- Preallocate the streaming packet buffer once; reject packets exceeding the
+  declared maximum. Resource-limit failures can now occur at construction.
+- Replace integer sentinels, packed block flags, and positional stream indices
+  with typed syntax, named entropy streams, owned reference buffers, and explicit
+  lifecycle states. Split geometry, motion sampling, and transforms into modules.
 
+## 0.2.0
 
 - Fix P pictures that select the current destination as their second motion
   reference, including reads from blocks already reconstructed in that picture.
   These valid streams previously failed with `future reference in P frame`.
 - Add synthetic current-reference regressions and an opt-in streaming comparison
   of every original H4M movie under a supplied directory with the pinned C decoder.
-
 
 ## 0.1.0
 

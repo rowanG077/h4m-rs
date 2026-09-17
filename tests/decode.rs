@@ -1,4 +1,5 @@
 //! Decoder correctness and malformed-input regression tests.
+#![cfg(feature = "std")]
 
 mod common;
 
@@ -16,7 +17,7 @@ fn synthetic_corpus_decodes() {
         {
             assert_eq!(
                 frame.y.data.len(),
-                fixture.info.width as usize * fixture.info.height as usize
+                fixture.info.width() as usize * fixture.info.height() as usize
             );
             seen.push(frame.display_index);
         }
@@ -32,13 +33,13 @@ fn synthetic_corpus_decodes() {
 #[test]
 fn literal_pixels_and_prediction_are_exact() {
     for (hs, vs) in [(1, 1), (2, 1), (2, 2)] {
-        let info = VideoInfo {
-            version: Version::V15,
-            width: 32,
-            height: 16,
-            horizontal_sampling: hs,
-            vertical_sampling: vs,
-        };
+        let info = VideoInfo::new(
+            Version::V15,
+            32,
+            16,
+            h4m::ChromaSampling::try_from((hs, vs)).unwrap(),
+        )
+        .unwrap();
         let mut decoder = VideoDecoder::new(info).unwrap();
         let packet = common::intra(info, 2, 11, 0);
         let frame = decoder.decode(FrameType::I, 0, &packet).unwrap();
@@ -100,16 +101,16 @@ fn limits_and_poisoning() {
         ),
         Err(Error::Limit(_))
     ));
-    let mut d = Decoder::with_limits(
-        &data[..],
-        Limits {
-            max_frame_bytes: 1,
-            ..Limits::default()
-        },
-    )
-    .unwrap();
-    assert!(matches!(d.next_frame(), Err(Error::Limit(_))));
-    assert!(matches!(d.next_frame(), Err(Error::Failed)));
+    assert!(matches!(
+        Decoder::with_limits(
+            &data[..],
+            Limits {
+                max_frame_bytes: 1,
+                ..Limits::default()
+            }
+        ),
+        Err(Error::Limit(_))
+    ));
     let mut d = VideoDecoder::new(fixture.info).unwrap();
     assert!(d.decode(FrameType::P, 0, &fixture.packets[0].data).is_err());
     assert!(matches!(
@@ -196,13 +197,13 @@ fn invalid_headers_and_block_accounting_are_rejected() {
 
 #[test]
 fn p_picture_second_reference_uses_the_current_buffer() {
-    let info = VideoInfo {
-        version: Version::V15,
-        width: 32,
-        height: 16,
-        horizontal_sampling: 2,
-        vertical_sampling: 2,
-    };
+    let info = VideoInfo::new(
+        Version::V15,
+        32,
+        16,
+        h4m::ChromaSampling::try_from((2, 2)).unwrap(),
+    )
+    .unwrap();
     let mut decoder = VideoDecoder::new(info).unwrap();
     let mut expected = Vec::new();
     decoder
