@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.3.0
+
+
 - Replace mutable numeric `VideoInfo` fields with a validated constructor,
   accessors, and `ChromaSampling`. Expose checked wire-code conversion for
   `FrameType`.
@@ -14,6 +17,7 @@
 - Replace integer sentinels, packed block flags, and positional stream indices
   with typed syntax, named entropy streams, owned reference buffers, and explicit
   lifecycle states. Split geometry, motion sampling, and transforms into modules.
+
 
 ## 0.2.0
 
